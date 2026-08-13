@@ -1,13 +1,34 @@
+const { Op } = require("sequelize");
 const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
 
 // Only what a storefront needs. The owner's account id is not part of it.
-const PUBLIC_ATTRS = ["id", "name", "slug", "description", "logo"];
+const PUBLIC_ATTRS = ["id", "name", "slug", "description", "logo", "category", "city", "shipping"];
 
 exports.list = catchAsync(async (req, res) => {
+  // The category strip and the city filter narrow this list; absent, it is the
+  // whole square.
+  const where = { status: "active" };
+
+  if (req.query.category) where.category = req.query.category;
+  if (req.query.city) where.city = req.query.city;
+
+  // iLike rather than like: nobody types a shop name with its capitals in the
+  // right places. Escaped so a % in the query searches for a percent sign
+  // instead of matching everything.
+  const q = req.query.q?.trim();
+
+  if (q) {
+    const term = `%${q.replace(/[%_\\]/g, (c) => "\\" + c)}%`;
+    where[Op.or] = [
+      { name: { [Op.iLike]: term } },
+      { description: { [Op.iLike]: term } },
+    ];
+  }
+
   const shops = await Market.Shop.findAll({
-    where: { status: "active" },
+    where,
     attributes: PUBLIC_ATTRS,
     order: [["createdAt", "DESC"]],
   });

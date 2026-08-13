@@ -3,7 +3,10 @@ const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
 
-const SHOP_ATTRS = ["id", "name", "slug", "description", "logo", "status", "createdAt"];
+const SHOP_ATTRS = [
+  "id", "name", "slug", "description", "logo",
+  "category", "city", "shipping", "status", "createdAt",
+];
 
 exports.list = catchAsync(async (req, res) => {
   const shops = await Market.Shop.findAll({
@@ -20,13 +23,17 @@ exports.get = catchAsync(async (req, res) => {
 });
 
 exports.create = catchAsync(async (req, res) => {
-  const { name, slug, description } = req.body;
+  const { name, slug, description, category, city, shipping } = req.body;
 
   const shop = await Market.Shop.create({
     accountId: req.sessionAccount.id,
     name,
     slug,
     description: description?.trim() || null,
+    category,
+    city,
+    shipping: shipping || "seller",
+    // Draft, not active: the seller sees the storefront before the square does.
     status: "draft",
   });
 
@@ -40,12 +47,26 @@ exports.create = catchAsync(async (req, res) => {
 });
 
 exports.update = catchAsync(async (req, res, next) => {
-  const { name, description, status } = req.body;
+  const { name, description, status, category, city, shipping } = req.body;
 
   const updates = {};
 
   if (name?.trim()) updates.name = name.trim();
   if (description !== undefined) updates.description = description?.trim() || null;
+
+  if (category) {
+    if (!Market.SHOP_CATEGORY.includes(category))
+      return next(new AppError("Pick a category from the list", 406));
+    updates.category = category;
+  }
+
+  if (city) updates.city = city;
+
+  if (shipping) {
+    if (!Market.SHIPPING_MODE.includes(shipping))
+      return next(new AppError("Pick a delivery option from the list", 406));
+    updates.shipping = shipping;
+  }
 
   if (status) {
     if (!Market.SHOP_STATUS.includes(status)) {

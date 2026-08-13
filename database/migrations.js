@@ -4,7 +4,9 @@ const { db } = require('./config');
 // one, so a column added to a model after the table exists is silently absent.
 // These run on every boot and are idempotent.
 const COLUMNS = [
-  // { table: '"market"."shops"', column: 'slug', definition: 'VARCHAR(255)' },
+  { table: '"market"."shops"', column: 'category', definition: 'VARCHAR(255)' },
+  { table: '"market"."shops"', column: 'city', definition: 'VARCHAR(255)' },
+  { table: '"market"."shops"', column: 'shipping', definition: "VARCHAR(255) NOT NULL DEFAULT 'seller'" },
 ];
 
 const DROPS = [

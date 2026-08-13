@@ -10,6 +10,14 @@ const PRODUCT_STATUS = ["draft", "active", "out_of_stock", "archived"];
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
 const SUBORDER_STATUS = ["pending", "paid", "shipped", "delivered", "cancelled", "refunded"];
 
+// What a shopper browses by. A shop declares the one most of its stock belongs
+// to; a product can still sit in another.
+const SHOP_CATEGORY = ["home", "tech", "fashion", "beauty", "sports", "tools", "food"];
+
+// How this seller gets an order to a buyer by default. Set per shop rather than
+// per product because it follows from how the seller works, not from the item.
+const SHIPPING_MODE = ["seller", "plaza", "pickup"];
+
 const Shop = db.define(
   "shops",
   {
@@ -55,6 +63,26 @@ const Shop = db.define(
       type: DataTypes.STRING,
       allowNull: true,
       field: "logo_id",
+    },
+    category: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      validate: { isIn: [SHOP_CATEGORY] },
+      field: "category",
+    },
+    // Stored as a slug rather than a free string so that two sellers cannot
+    // write "Bogota" and "Bogotá" and end up in different filters.
+    city: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      field: "city",
+    },
+    shipping: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "seller",
+      validate: { isIn: [SHIPPING_MODE] },
+      field: "shipping",
     },
     status: {
       type: DataTypes.STRING,
@@ -275,6 +303,7 @@ const OrderItem = db.define(
 const Market = {
   Shop, Product, Order, SubOrder, OrderItem,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
+  SHOP_CATEGORY, SHIPPING_MODE,
 };
 
 module.exports = Market;

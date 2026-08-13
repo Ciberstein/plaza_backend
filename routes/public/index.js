@@ -3,6 +3,7 @@ const express = require("express");
 // ROUTES
 const routes = {
   shops: require("./shops.routes"),
+  meta: require("./meta.routes"),
 };
 
 const router = express.Router();
