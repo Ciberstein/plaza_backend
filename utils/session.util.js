@@ -23,6 +23,9 @@ const issueSession = async (res, account) => {
       email: account.email,
       role: account.role,
       avatar: account.avatar,
+      // Carried here as well as on /auth/session: without it the client cannot
+      // tell, right after registering, whether to ask for the code.
+      verified: account.verified,
     },
   };
 };

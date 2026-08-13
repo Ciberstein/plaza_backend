@@ -4,15 +4,14 @@ const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
 
 // Only what a storefront needs. The owner's account id is not part of it.
-const PUBLIC_ATTRS = ["id", "name", "slug", "description", "logo", "category", "city", "shipping"];
+const PUBLIC_ATTRS = ["id", "name", "slug", "description", "logo", "cityId", "shipping"];
 
 exports.list = catchAsync(async (req, res) => {
   // The category strip and the city filter narrow this list; absent, it is the
   // whole square.
   const where = { status: "active" };
 
-  if (req.query.category) where.category = req.query.category;
-  if (req.query.city) where.city = req.query.city;
+  if (req.query.cityId) where.cityId = req.query.cityId;
 
   // iLike rather than like: nobody types a shop name with its capitals in the
   // right places. Escaped so a % in the query searches for a percent sign

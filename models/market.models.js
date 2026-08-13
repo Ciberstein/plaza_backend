@@ -5,14 +5,20 @@ const { db } = require("../database/config");
 // is never a loose string typed twice. Plain validated strings rather than a
 // Postgres ENUM: adding a state to an ENUM needs an ALTER TYPE migration and
 // these will grow.
-const SHOP_STATUS = ["draft", "active", "suspended", "closed"];
+// A shop is a brand other people are asked to trust, so it does not go live
+// because its owner said so. Anyone can sell under their own name without any
+// of this; opening a shop is the step that needs a human to approve it.
+//
+//   draft     being set up, only the owner sees it
+//   pending   submitted, waiting on an administrator
+//   rejected  refused, with a note saying what to fix; can be resubmitted
+//   active    approved and listed
+//   suspended moderation decision taken after approval
+//   closed    the owner took it down
+const SHOP_STATUS = ["draft", "pending", "rejected", "active", "suspended", "closed"];
 const PRODUCT_STATUS = ["draft", "active", "out_of_stock", "archived"];
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
 const SUBORDER_STATUS = ["pending", "paid", "shipped", "delivered", "cancelled", "refunded"];
-
-// What a shopper browses by. A shop declares the one most of its stock belongs
-// to; a product can still sit in another.
-const SHOP_CATEGORY = ["home", "tech", "fashion", "beauty", "sports", "tools", "food"];
 
 // How this seller gets an order to a buyer by default. Set per shop rather than
 // per product because it follows from how the seller works, not from the item.
@@ -64,18 +70,14 @@ const Shop = db.define(
       allowNull: true,
       field: "logo_id",
     },
-    category: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      validate: { isIn: [SHOP_CATEGORY] },
-      field: "category",
-    },
-    // Stored as a slug rather than a free string so that two sellers cannot
-    // write "Bogota" and "Bogotá" and end up in different filters.
-    city: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      field: "city",
+    // Where the shop is based. A reference to geo.cities rather than a string:
+    // two sellers typing "Bogota" and "Bogotá" would otherwise land in
+    // different filters. Optional, because a shop that only ships nationally
+    // has no useful address to show.
+    cityId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "cityId",
     },
     shipping: {
       type: DataTypes.STRING,
@@ -90,6 +92,30 @@ const Shop = db.define(
       defaultValue: "draft",
       validate: { isIn: [SHOP_STATUS] },
       field: "status",
+    },
+    submittedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "submittedAt",
+    },
+    // Set the first time an administrator approves it. Its presence is what
+    // lets a closed shop reopen without going back through review.
+    approvedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "approvedAt",
+    },
+    // Why it was refused. Shown to the owner, because "rejected" with no reason
+    // gives them nothing to act on and guarantees they resubmit it unchanged.
+    reviewNote: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "reviewNote",
+    },
+    reviewedBy: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "reviewedBy",
     },
   },
   {
@@ -108,12 +134,32 @@ const Product = db.define(
       type: DataTypes.INTEGER,
       field: "id",
     },
-    // Every row in this schema carries the shop it belongs to. It is the line
-    // that keeps one seller's catalogue out of another's.
-    shopId: {
+    // The seller. An account is enough to list something — a shop is a brand a
+    // seller may choose to trade under, not a requirement to trade at all.
+    // This is the column that keeps one seller's catalogue out of another's.
+    accountId: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      field: "accountId",
+    },
+    // Null means the listing is sold by the person directly, under their
+    // username and avatar. Set means it is sold under a shop's name and logo.
+    shopId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
       field: "shopId",
+    },
+    categoryId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "categoryId",
+    },
+    // Where it ships from. On the product rather than the seller, because the
+    // same person can list something they are storing in another city.
+    cityId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "cityId",
     },
     title: {
       type: DataTypes.STRING,
@@ -303,7 +349,7 @@ const OrderItem = db.define(
 const Market = {
   Shop, Product, Order, SubOrder, OrderItem,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
-  SHOP_CATEGORY, SHIPPING_MODE,
+  SHIPPING_MODE,
 };
 
 module.exports = Market;

@@ -2,6 +2,7 @@ const AppError = require("../../utils/appError.util");
 const catchAsync = require("../../utils/catchAsync.util");
 const Accounts = require("../../models/accounts.models");
 const { hash } = require("../../utils/hash.util");
+const password_rules = require("../../utils/password.util");
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -10,9 +11,10 @@ exports.validate = catchAsync(async (req, res, next) => {
 
   if (!username?.trim()) return next(new AppError("Username is required", 406));
   if (!email?.trim() || !EMAIL.test(email)) return next(new AppError("A valid email is required", 406));
-  if (!password || password.length < 8) {
-    return next(new AppError("Password must be at least 8 characters", 406));
-  }
+  // Delegated so that registration, reset and change all judge a password by
+  // the same rule. Three separate length checks drift apart within a month.
+  const weak = password_rules.check(password, { email, username });
+  if (weak) return next(new AppError(weak, 406));
 
   req.body.email = email.trim().toLowerCase();
   req.body.username = username.trim();

@@ -2,22 +2,21 @@ const AppError = require("../../utils/appError.util");
 const catchAsync = require("../../utils/catchAsync.util");
 const Market = require("../../models/market.models");
 const { uniqueSlug } = require("../../utils/slug.util");
-const { CITY_VALUES } = require("../../data/cities");
+const Geo = require("../../models/geo.models");
 
 exports.validate = catchAsync(async (req, res, next) => {
-  const { name, category, city, shipping } = req.body;
+  const { name, cityId, shipping } = req.body;
 
   if (!name?.trim()) return next(new AppError("Shop name is required", 406));
   if (name.trim().length < 3) return next(new AppError("Shop name is too short", 406));
 
-  // Checked against the same lists /public/meta serves the form, so a value the
+  // Checked against the same rows /public/meta serves the form, so a value the
   // form could not have offered is rejected here rather than reaching the model
-  // and coming back as a generic validation error.
-  if (!Market.SHOP_CATEGORY.includes(category))
-    return next(new AppError("Pick a category from the list", 406));
-
-  if (!CITY_VALUES.includes(city))
-    return next(new AppError("Pick a city from the list", 406));
+  // and coming back as a generic constraint error.
+  if (cityId !== undefined && cityId !== null) {
+    const city = await Geo.City.findOne({ where: { id: cityId, active: true } });
+    if (!city) return next(new AppError("Pick a city from the list", 406));
+  }
 
   if (shipping !== undefined && !Market.SHIPPING_MODE.includes(shipping))
     return next(new AppError("Pick a delivery option from the list", 406));

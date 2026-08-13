@@ -33,3 +33,30 @@ exports.restrict = (...roles) => (req, res, next) => {
   }
   next();
 };
+
+// Guards what an unconfirmed address is allowed to do.
+//
+// The line is drawn at publishing, not at browsing or buying. Blocking a
+// purchase loses a customer in their first minute over a mailbox they may check
+// tomorrow; blocking a listing is what stops a throwaway address from filling
+// the catalogue.
+exports.verified = catchAsync(async (req, res, next) => {
+  if (!req.sessionAccount?.verified) {
+    return next(new AppError("Confirm your email address before selling", 403));
+  }
+
+  next();
+});
+
+// Reserved for staff. Checked against the row in the database, never against
+// anything the client sent: a role read out of the request body is a role the
+// requester chose for themselves.
+exports.admin = catchAsync(async (req, res, next) => {
+  if (req.sessionAccount?.role !== "admin") {
+    // 404 rather than 403: an admin area that announces its own existence to
+    // everyone who pokes at it is an invitation.
+    return next(new AppError("Not found", 404));
+  }
+
+  next();
+});

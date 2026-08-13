@@ -2,6 +2,7 @@ const express = require("express");
 
 // ROUTES
 const routes = {
+  account: require("./accounts.routes"),
   shops: require("./shops.routes"),
 };
 

@@ -1,5 +1,7 @@
 const Accounts = require("./accounts.models");
 const Market = require("./market.models");
+const Geo = require("./geo.models");
+const { Category } = require("./categories.models");
 
 const init = () => {
 
@@ -23,12 +25,46 @@ const init = () => {
     as: "buyer",
   });
 
+  // A listing belongs to the person, always. The shop is optional branding on
+  // top, which is why deleting a shop must not take the products with it.
+  Accounts.Account.hasMany(Market.Product, {
+    foreignKey: "accountId",
+    as: "listings",
+    onDelete: "CASCADE",
+  });
+  Market.Product.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "seller",
+  });
+
+  /* GEOGRAPHY */
+
+  Geo.Country.hasMany(Geo.City, { foreignKey: "countryId", as: "cities" });
+  Geo.City.belongsTo(Geo.Country, { foreignKey: "countryId", as: "country" });
+
+  Geo.City.hasMany(Market.Shop, { foreignKey: "cityId", as: "shops" });
+  Market.Shop.belongsTo(Geo.City, { foreignKey: "cityId", as: "city" });
+
+  Geo.City.hasMany(Market.Product, { foreignKey: "cityId", as: "products" });
+  Market.Product.belongsTo(Geo.City, { foreignKey: "cityId", as: "city" });
+
+  /* CATEGORIES */
+
+  // Self-referencing: the tree is one table, so its depth is not baked in.
+  Category.hasMany(Category, { foreignKey: "parentId", as: "children" });
+  Category.belongsTo(Category, { foreignKey: "parentId", as: "parent" });
+
+  Category.hasMany(Market.Product, { foreignKey: "categoryId", as: "products" });
+  Market.Product.belongsTo(Category, { foreignKey: "categoryId", as: "category" });
+
   /* MARKET RELATIONSHIPS */
 
+  // SET NULL, not CASCADE: closing a shop unbrands its listings, it does not
+  // destroy the seller's inventory.
   Market.Shop.hasMany(Market.Product, {
     foreignKey: "shopId",
     as: "products",
-    onDelete: "CASCADE",
+    onDelete: "SET NULL",
   });
   Market.Product.belongsTo(Market.Shop, {
     foreignKey: "shopId",

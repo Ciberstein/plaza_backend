@@ -46,4 +46,19 @@ router.post("/logout", controllers.accounts.logout);
 
 router.get("/session", middlewares.auth.protect, controllers.accounts.session);
 
+// Confirming the address the account was opened with.
+router.post("/verify", middlewares.auth.protect, controllers.accounts.verify);
+router.post(
+  "/verify/resend",
+  credentialsLimiter,
+  middlewares.auth.protect,
+  controllers.accounts.resendVerification
+);
+
+// Recovery. Both are open to anyone by definition — the person cannot sign in —
+// so they carry the same limiter as the credential endpoints and neither
+// reveals whether an address is registered.
+router.post("/password/forgot", credentialsLimiter, controllers.accounts.forgotPassword);
+router.post("/password/reset", credentialsLimiter, controllers.accounts.resetPassword);
+
 module.exports = router;

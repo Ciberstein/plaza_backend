@@ -2,7 +2,7 @@ const { db } = require('./config');
 
 // One schema per domain, the way the other projects split them. Keeps the
 // marketplace tables apart from accounts and from anything added later.
-const SCHEMAS = ['accounts', 'auth', 'app', 'market'];
+const SCHEMAS = ['accounts', 'auth', 'app', 'geo', 'market'];
 
 const createSchemas = async () => {
   const existing = await db.showAllSchemas();

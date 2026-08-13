@@ -5,7 +5,7 @@ const Accounts = require("../../models/accounts.models");
 
 const SHOP_ATTRS = [
   "id", "name", "slug", "description", "logo",
-  "category", "city", "shipping", "status", "createdAt",
+  "cityId", "shipping", "status", "submittedAt", "approvedAt", "reviewNote", "createdAt",
 ];
 
 exports.list = catchAsync(async (req, res) => {
@@ -23,15 +23,14 @@ exports.get = catchAsync(async (req, res) => {
 });
 
 exports.create = catchAsync(async (req, res) => {
-  const { name, slug, description, category, city, shipping } = req.body;
+  const { name, slug, description, cityId, shipping } = req.body;
 
   const shop = await Market.Shop.create({
     accountId: req.sessionAccount.id,
     name,
     slug,
     description: description?.trim() || null,
-    category,
-    city,
+    cityId: cityId ?? null,
     shipping: shipping || "seller",
     // Draft, not active: the seller sees the storefront before the square does.
     status: "draft",
@@ -47,45 +46,104 @@ exports.create = catchAsync(async (req, res) => {
 });
 
 exports.update = catchAsync(async (req, res, next) => {
-  const { name, description, status, category, city, shipping } = req.body;
+  const { name, description, cityId, shipping } = req.body;
+
+  // A shop under review cannot be edited: an administrator is looking at a
+  // specific set of details, and letting them change underneath is how a
+  // benign shop gets approved and a different one goes live.
+  if (req.shop.status === "pending") {
+    return next(new AppError("This shop is being reviewed. Withdraw it first to make changes.", 409));
+  }
+
+  if (req.shop.status === "suspended") {
+    return next(new AppError("This shop is suspended", 403));
+  }
 
   const updates = {};
 
   if (name?.trim()) updates.name = name.trim();
   if (description !== undefined) updates.description = description?.trim() || null;
-
-  if (category) {
-    if (!Market.SHOP_CATEGORY.includes(category))
-      return next(new AppError("Pick a category from the list", 406));
-    updates.category = category;
-  }
-
-  if (city) updates.city = city;
+  if (cityId !== undefined) updates.cityId = cityId || null;
 
   if (shipping) {
-    if (!Market.SHIPPING_MODE.includes(shipping))
+    if (!Market.SHIPPING_MODE.includes(shipping)) {
       return next(new AppError("Pick a delivery option from the list", 406));
+    }
     updates.shipping = shipping;
   }
 
-  if (status) {
-    if (!Market.SHOP_STATUS.includes(status)) {
-      return next(new AppError(`Status must be one of: ${Market.SHOP_STATUS.join(", ")}`, 406));
-    }
-    // Suspension is a moderation decision, not something a seller grants
-    // themselves back.
-    if (status === "suspended") {
-      return next(new AppError("A shop cannot suspend itself", 403));
-    }
-    if (req.shop.status === "suspended") {
-      return next(new AppError("This shop is suspended", 403));
-    }
-    updates.status = status;
-  }
-
-  // The slug is deliberately absent: it is the address people saved.
-
+  // `status` is deliberately absent. It is not the owner's to set — that is the
+  // whole point of the review. The transitions they are allowed live in their
+  // own endpoints below, each with its own rule.
   await req.shop.update(updates);
 
   return res.status(200).json(req.shop);
+});
+
+/* ─── the transitions an owner is allowed ────────────────────────────────── */
+
+// Hands the shop to an administrator. Allowed from draft and from rejected, so
+// a refusal can be fixed and sent back.
+exports.submit = catchAsync(async (req, res, next) => {
+  const shop = req.shop;
+
+  if (!["draft", "rejected"].includes(shop.status)) {
+    return next(new AppError(`A shop that is ${shop.status} cannot be submitted`, 409));
+  }
+
+  if (!shop.cityId) {
+    return next(new AppError("Add the city the shop operates from before submitting", 406));
+  }
+
+  await shop.update({
+    status: "pending",
+    submittedAt: new Date(),
+    // Cleared so an old refusal is not shown against a fresh submission.
+    reviewNote: null,
+  });
+
+  return res.status(200).json(shop);
+});
+
+// Takes it back out of the queue, which is what makes editing possible again.
+exports.withdraw = catchAsync(async (req, res, next) => {
+  const shop = req.shop;
+
+  if (shop.status !== "pending") {
+    return next(new AppError("This shop is not waiting for review", 409));
+  }
+
+  await shop.update({ status: shop.approvedAt ? "active" : "draft", submittedAt: null });
+
+  return res.status(200).json(shop);
+});
+
+exports.close = catchAsync(async (req, res, next) => {
+  const shop = req.shop;
+
+  if (shop.status !== "active") {
+    return next(new AppError("Only an open shop can be closed", 409));
+  }
+
+  await shop.update({ status: "closed" });
+
+  return res.status(200).json(shop);
+});
+
+// Reopening skips review, but only for a shop that was approved once. Without
+// that check, closing and reopening would be a way around the queue.
+exports.reopen = catchAsync(async (req, res, next) => {
+  const shop = req.shop;
+
+  if (shop.status !== "closed") {
+    return next(new AppError("This shop is not closed", 409));
+  }
+
+  if (!shop.approvedAt) {
+    return next(new AppError("This shop has never been approved", 409));
+  }
+
+  await shop.update({ status: "active" });
+
+  return res.status(200).json(shop);
 });
