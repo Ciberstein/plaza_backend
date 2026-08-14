@@ -2,6 +2,8 @@ const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
+const cloudinary = require("../../utils/cloudinary.util");
+const { randomUUID } = require("crypto");
 
 const SHOP_ATTRS = [
   "id", "name", "slug", "description", "logo",
@@ -78,6 +80,68 @@ exports.update = catchAsync(async (req, res, next) => {
   await req.shop.update(updates);
 
   return res.status(200).json(req.shop);
+});
+
+/* ─── the logo ────────────────────────────────────────────────────────────── */
+
+/**
+ * A shop's mark.
+ *
+ * The columns existed from the start and nothing ever filled them, which is why
+ * every shop on Plaza shows the generated tile: not because no one uploaded a
+ * logo, but because there was no way to.
+ *
+ * Contained rather than cropped to a square. A wordmark is most shop logos, and
+ * a square crop cuts the ends off the name.
+ */
+exports.uploadLogo = catchAsync(async (req, res, next) => {
+  const shop = req.shop;
+
+  if (!cloudinary.configured()) {
+    return next(new AppError("Image uploads are not configured on this server", 503));
+  }
+
+  if (!req.file) return next(new AppError("Choose an image first", 406));
+
+  // Same rule as editing the details: an administrator is looking at a specific
+  // shop, and letting it change underneath them is how one thing gets approved
+  // and a different one goes live.
+  if (shop.status === "pending") {
+    return next(new AppError("This shop is being reviewed. Withdraw it first to make changes.", 409));
+  }
+
+  const result = await cloudinary.upload(req.file.buffer, {
+    folder: cloudinary.folders.shop(shop.id),
+    public_id: randomUUID(),
+    transformation: [{ width: 512, height: 512, crop: "limit" }],
+  });
+
+  // The old file goes after the new one is stored, not before: a failed upload
+  // must leave the shop with the logo it had.
+  const previous = shop.logo_id;
+
+  await shop.update({ logo: result.secure_url, logo_id: result.public_id });
+
+  if (previous) {
+    await cloudinary.remove(previous).catch(err =>
+      console.error("CLOUDINARY: could not remove old logo:", err.message)
+    );
+  }
+
+  return res.status(200).json(shop);
+});
+
+/** Removing it, not replacing it. The folder goes too. */
+exports.deleteLogo = catchAsync(async (req, res) => {
+  const shop = req.shop;
+
+  await shop.update({ logo: null, logo_id: null });
+
+  await cloudinary
+    .removeFolder(cloudinary.folders.shop(shop.id))
+    .catch(err => console.error("CLOUDINARY: could not clear shop folder:", err.message));
+
+  return res.status(200).json(shop);
 });
 
 /* ─── the transitions an owner is allowed ────────────────────────────────── */

@@ -20,15 +20,26 @@ const LISTED = ["active", "paused", "out_of_stock"];
 
 const IMAGE_ATTRS = ["id", "url", "position"];
 
+// The order of a listing's photographs is the order the seller arranged them
+// in, and the first is the one every grid shows. Kept apart from the include so
+// a caller can ask for both this and an ordering of its own: spreading a shape
+// that carries `order` on top of a query that already had one silently threw
+// the query's away, which is how "your listings, newest first" quietly became
+// "your listings, by whichever photo happens to be first".
+const IMAGE_ORDER = [{ model: Market.ProductImage, as: "images" }, "position", "ASC"];
+
 const withImages = {
   include: [{ model: Market.ProductImage, as: "images", attributes: IMAGE_ATTRS }],
-  order: [[{ model: Market.ProductImage, as: "images" }, "position", "ASC"]],
 };
 
 // Returns the listing the way every endpoint here answers with it, so a caller
 // never has to guess whether images came back on this one.
 const reload = (id) =>
-  Market.Product.findByPk(id, { attributes: PRODUCT_ATTRS, ...withImages });
+  Market.Product.findByPk(id, {
+    attributes: PRODUCT_ATTRS,
+    ...withImages,
+    order: [IMAGE_ORDER],
+  });
 
 /**
  * Running out of stock is not a decision, so it is not a transition the seller
@@ -52,8 +63,9 @@ exports.list = catchAsync(async (req, res) => {
   const products = await Market.Product.findAll({
     where: { accountId: req.sessionAccount.id },
     attributes: PRODUCT_ATTRS,
-    order: [["createdAt", "DESC"]],
     ...withImages,
+    // Newest listing first, and inside each one the photographs as arranged.
+    order: [["createdAt", "DESC"], IMAGE_ORDER],
   });
 
   return res.status(200).json(products);
@@ -168,6 +180,36 @@ exports.archive = catchAsync(async (req, res, next) => {
   return res.status(200).json(await reload(product.id));
 });
 
+/**
+ * Gone, not put away.
+ *
+ * Archiving is for something that might come back; this is for something that
+ * should not exist. Both are offered because a seller means one or the other
+ * and one word cannot cover both.
+ *
+ * Safe to do even to something that sold: OrderItem keeps the title and the
+ * price it was bought at, and its productId is SET NULL rather than cascaded,
+ * so a buyer's history still reads after the listing is gone.
+ */
+exports.remove = catchAsync(async (req, res) => {
+  const folder = cloudinary.folders.product(req.product.id);
+
+  await req.product.destroy();
+
+  // The whole folder, not the files one by one. Same result for the rows we
+  // know about, and it also takes anything the database lost track of — an
+  // upload that succeeded on the way to a request that failed afterwards.
+  //
+  // After the delete and never allowed to fail it: if Cloudinary refuses, the
+  // seller has still deleted the listing, and what is left is a file nothing
+  // links to rather than a listing that would not go away.
+  await cloudinary
+    .removeFolder(folder)
+    .catch(err => console.error("CLOUDINARY: could not clear product folder:", err.message));
+
+  return res.status(204).send();
+});
+
 /* ─── photographs ─────────────────────────────────────────────────────────── */
 
 exports.addImage = catchAsync(async (req, res, next) => {
@@ -186,7 +228,7 @@ exports.addImage = catchAsync(async (req, res, next) => {
   }
 
   const result = await cloudinary.upload(req.file.buffer, {
-    folder: `plaza/products/${req.product.id}`,
+    folder: cloudinary.folders.product(req.product.id),
     resource_type: "image",
   });
 

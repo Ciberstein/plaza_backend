@@ -161,7 +161,7 @@ exports.uploadAvatar = catchAsync(async (req, res, next) => {
   if (!req.file) return next(new AppError("Choose an image first", 406));
 
   const result = await cloudinary.upload(req.file.buffer, {
-    folder: "plaza/avatars",
+    folder: cloudinary.folders.account(account.id),
     public_id: randomUUID(),
     transformation: [{ width: 256, height: 256, crop: "fill", gravity: "face" }],
   });
@@ -181,16 +181,24 @@ exports.uploadAvatar = catchAsync(async (req, res, next) => {
   return res.status(200).json(publicShape(account));
 });
 
+/**
+ * Removing the photo, not replacing it.
+ *
+ * The folder goes too, not just the file. Uploading writes a fresh public_id
+ * each time so the old one cannot be overwritten, which means a folder can hold
+ * files from earlier failures; clearing the folder is the only way to be sure
+ * nothing of the photograph is left on the server.
+ */
 exports.deleteAvatar = catchAsync(async (req, res) => {
   const account = req.sessionAccount;
 
-  if (account.avatar_id) {
-    await cloudinary.remove(account.avatar_id).catch(err =>
-      console.error("CLOUDINARY: could not remove avatar:", err.message)
-    );
-  }
-
+  // The record is cleared first and unconditionally. Storage that will not
+  // answer must not keep a photo attached to someone who asked to remove it.
   await account.update({ avatar: null, avatar_id: null });
+
+  await cloudinary
+    .removeFolder(cloudinary.folders.account(account.id))
+    .catch(err => console.error("CLOUDINARY: could not clear avatar folder:", err.message));
 
   return res.status(200).json(publicShape(account));
 });

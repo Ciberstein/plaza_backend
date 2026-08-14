@@ -36,6 +36,8 @@ router.post(
 
 router.post("/:id/archive", middlewares.products.owned, controllers.products.archive);
 
+router.delete("/:id", middlewares.products.owned, controllers.products.remove);
+
 /* photographs */
 
 router.post(
