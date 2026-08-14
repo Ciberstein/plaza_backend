@@ -3,6 +3,24 @@ const Market = require("../../models/market.models");
 const { Category } = require("../../models/categories.models");
 const Geo = require("../../models/geo.models");
 
+// How worn the thing is. Plain language rather than a grading scale nobody
+// shares the definition of.
+const conditions = {
+  new: { label: "New", subtitle: "Never used, still as it was made" },
+  like_new: { label: "Used - like new", subtitle: "Used once or twice, no marks" },
+  good: { label: "Used - good", subtitle: "Signs of use, nothing broken" },
+  acceptable: { label: "Used - acceptable", subtitle: "Worn, and it shows" },
+  for_parts: { label: "For parts", subtitle: "Not working, sold to be taken apart" },
+};
+
+// How the seller is willing to hand it over. Several at once.
+const delivery = {
+  shipping: { label: "Shipping", subtitle: "Sent by courier" },
+  door_delivery: { label: "Delivery to the buyer", subtitle: "You take it to their address" },
+  door_pickup: { label: "Pickup from you", subtitle: "They collect it from your address" },
+  public_meetup: { label: "Meet in public", subtitle: "Somewhere busy, agreed with the buyer" },
+};
+
 const shipping = {
   seller: { label: "I ship it myself", subtitle: "You buy the label and hand it over" },
   plaza: { label: "Plaza collects it", subtitle: "A courier picks up from your address" },
@@ -65,5 +83,7 @@ exports.index = catchAsync(async (_req, res) => {
       slug: c.slug,
     })),
     shipping: Market.SHIPPING_MODE.map(value => ({ value, ...shipping[value] })),
+    conditions: Market.PRODUCT_CONDITION.map(value => ({ value, ...conditions[value] })),
+    delivery: Market.DELIVERY_OPTION.map(value => ({ value, ...delivery[value] })),
   });
 });

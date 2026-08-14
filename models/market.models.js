@@ -16,9 +16,42 @@ const { db } = require("../database/config");
 //   suspended moderation decision taken after approval
 //   closed    the owner took it down
 const SHOP_STATUS = ["draft", "pending", "rejected", "active", "suspended", "closed"];
-const PRODUCT_STATUS = ["draft", "active", "out_of_stock", "archived"];
+// paused is the seller's own decision to hide a listing; out_of_stock is not a
+// decision at all. Keeping them apart is what lets the interface say which of
+// the two happened instead of one word that could mean either.
+//
+//   draft         never published, only the seller sees it
+//   active        on the square
+//   paused        the seller took it down for now
+//   out_of_stock  nothing left to sell, set and cleared by the stock alone
+//   archived      put away, not expected back soon
+const PRODUCT_STATUS = ["draft", "active", "paused", "out_of_stock", "archived"];
+
+// How worn the thing is. Required of every listing and never defaulted: a
+// default here would mark everything second-hand as new by inattention, which
+// is precisely the lie the field exists to prevent.
+const PRODUCT_CONDITION = ["new", "like_new", "good", "acceptable", "for_parts"];
+
+// How the seller is willing to hand the thing over. Several at once, because
+// most people who will post a parcel will also meet you in a cafe.
+const DELIVERY_OPTION = ["shipping", "door_delivery", "door_pickup", "public_meetup"];
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
-const SUBORDER_STATUS = ["pending", "paid", "shipped", "delivered", "cancelled", "refunded"];
+// No money changes hands online yet, so `paid` sits unused and `confirmed` is
+// the event that matters: the seller saying yes. Both sides may cancel, and
+// either way the stock goes back on the shelf.
+//
+//   pending    the buyer asked, the seller has not answered
+//   confirmed  the seller accepted; they arrange the handover
+//   delivered  done
+//   cancelled  called off by either side
+const SUBORDER_STATUS = [
+  "pending", "confirmed", "paid", "shipped", "delivered", "cancelled", "refunded",
+];
+
+// Either side may call a purchase off, and which one did changes what the other
+// should do about it. "Cancelled" on its own does not say whether the seller
+// backed out or the buyer changed their mind.
+const CANCELLED_BY = ["buyer", "seller"];
 
 // How this seller gets an order to a buyer by default. Set per shop rather than
 // per product because it follows from how the seller works, not from the item.
@@ -197,6 +230,31 @@ const Product = db.define(
       validate: { isIn: [PRODUCT_STATUS] },
       field: "status",
     },
+    // Nullable in the column, required by the form. Rows written before the
+    // field existed have none, and backfilling them with a guess would be
+    // inventing a fact about someone else's goods.
+    condition: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      validate: { isIn: [PRODUCT_CONDITION] },
+      field: "condition",
+    },
+    // A Postgres array rather than a join table: the set is fixed, short, and
+    // never queried on its own. A table would be four rows of ceremony per
+    // listing to store what is really one answer.
+    delivery: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      allowNull: false,
+      defaultValue: [],
+      validate: {
+        known(value) {
+          if (!Array.isArray(value)) throw new Error("Delivery must be a list");
+          const bad = value.filter(v => !DELIVERY_OPTION.includes(v));
+          if (bad.length) throw new Error(`Unknown delivery option: ${bad.join(", ")}`);
+        },
+      },
+      field: "delivery",
+    },
   },
   {
     tableName: "products",
@@ -270,9 +328,21 @@ const SubOrder = db.define(
       allowNull: false,
       field: "orderId",
     },
-    shopId: {
+    // The seller, and the only thing that has to be there. A suborder used to
+    // hang off a shop, which quietly made every purchase require one — and on
+    // Plaza most people sell under their own name. This mirrors how a product
+    // is built for exactly the same reason.
+    accountId: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      field: "accountId",
+    },
+    // The brand it was bought under, if there was one. One suborder per seller
+    // *and* storefront: the same person selling one thing under their name and
+    // another under their shop is two different counters to walk up to.
+    shopId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
       field: "shopId",
     },
     subtotal: {
@@ -292,6 +362,20 @@ const SubOrder = db.define(
       type: DataTypes.DATE,
       allowNull: true,
       field: "shippedAt",
+    },
+    cancelledBy: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      validate: { isIn: [CANCELLED_BY] },
+      field: "cancelledBy",
+    },
+    // Optional, from either side. Nobody is made to justify themselves, but a
+    // cancellation with a line of explanation is the difference between a dead
+    // end and something the other person can act on.
+    cancelReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "cancelReason",
     },
   },
   {
@@ -346,9 +430,147 @@ const OrderItem = db.define(
   }
 );
 
+// A listing's photographs, in the order the seller arranged them.
+//
+// Its own table rather than a column on the product: a listing needs several
+// photographs, the seller reorders them, and each one is a file in Cloudinary
+// that has to be destroyed individually when it goes. None of that survives
+// being an array inside a row.
+const ProductImage = db.define(
+  "product_images",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    url: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      field: "url",
+    },
+    // Cloudinary's handle for the file. Kept so removing the row can destroy
+    // the asset with it, the same way a shop logo does.
+    publicId: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      field: "publicId",
+    },
+    // Zero is the cover. Explicit rather than "whichever row comes back first",
+    // because without an ORDER BY the database returns them in whatever order
+    // suits it, and the cover would change between requests.
+    position: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: "position",
+    },
+  },
+  {
+    tableName: "product_images",
+    schema: "market",
+  }
+);
+
+// How many photographs one listing may carry. Enforced in the middleware; kept
+// here so the limit is stated next to the thing it limits.
+const MAX_PRODUCT_IMAGES = 8;
+
+/**
+ * A basket, on the server.
+ *
+ * It lived in the browser first, which was wrong the moment pausing a listing
+ * had to empty it out of every basket holding it: nothing on this side can
+ * reach into someone else's localStorage. A row per person per listing can be
+ * deleted by whoever needs it gone.
+ *
+ * Quantity lives here rather than being a row per unit, because a basket is a
+ * statement of intent and "three of these" is one intent.
+ */
+const CartItem = db.define(
+  "cart_items",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    quantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1,
+      field: "quantity",
+    },
+  },
+  {
+    tableName: "cart_items",
+    schema: "market",
+    indexes: [{ unique: true, fields: ["accountId", "productId"] }],
+  }
+);
+
+/**
+ * Something someone wants to come back to.
+ *
+ * A join table and nothing else: no note, no list name, no position. Wanting
+ * something later is one bit of information, and the moment a favourite grows
+ * fields it stops being a bookmark and becomes a feature nobody asked for.
+ *
+ * The pair is unique, so favouriting twice is the same as favouriting once and
+ * the database says so rather than the endpoint remembering to.
+ */
+const Favourite = db.define(
+  "favourites",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+  },
+  {
+    tableName: "favourites",
+    schema: "market",
+    indexes: [{ unique: true, fields: ["accountId", "productId"] }],
+  }
+);
+
 const Market = {
-  Shop, Product, Order, SubOrder, OrderItem,
+  Shop, Product, ProductImage, Favourite, CartItem, Order, SubOrder, OrderItem,
+  MAX_PRODUCT_IMAGES,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
+  PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,
   SHIPPING_MODE,
 };
 

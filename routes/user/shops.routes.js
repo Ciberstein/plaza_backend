@@ -6,6 +6,7 @@ const controllers = {
 
 const middlewares = {
   shops: require("../../middlewares/user/shops.middlewares"),
+  upload: require("../../middlewares/upload.middlewares"),
 };
 
 const router = express.Router();
@@ -22,6 +23,15 @@ router.post(
 router.get("/:id", middlewares.shops.owned, controllers.shops.get);
 
 router.patch("/:id", middlewares.shops.owned, controllers.shops.update);
+
+router.post(
+  "/:id/logo",
+  middlewares.shops.owned,
+  middlewares.upload.single("image"),
+  controllers.shops.uploadLogo
+);
+
+router.delete("/:id/logo", middlewares.shops.owned, controllers.shops.deleteLogo);
 
 // The transitions an owner is allowed. Each is its own endpoint rather than a
 // status field on the update, because each carries a different rule and a

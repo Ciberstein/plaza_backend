@@ -3,6 +3,8 @@ const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Accounts = require("../../models/accounts.models");
 const cloudinary = require("../../utils/cloudinary.util");
+const username_rules = require("../../utils/username.util");
+const phone_rules = require("../../utils/phone.util");
 const { hash, compare } = require("../../utils/hash.util");
 const { issue, redeem } = require("../../utils/codes.util");
 const password_rules = require("../../utils/password.util");
@@ -11,6 +13,10 @@ const templates = require("../../mail/templates");
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// The phone is here because this shape is only ever sent to the person it
+// belongs to. Every other place an account is exposed — a seller beside a
+// listing, a buyer on an order — is built from its own attribute list, and
+// none of them name it.
 const publicShape = (account) => ({
   id: account.id,
   username: account.username,
@@ -18,6 +24,8 @@ const publicShape = (account) => ({
   role: account.role,
   avatar: account.avatar,
   verified: account.verified,
+  phone: account.phone,
+  phoneCountryId: account.phoneCountryId,
   createdAt: account.createdAt,
 });
 
@@ -31,11 +39,41 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
   const account = req.sessionAccount;
   const username = String(req.body.username || "").trim();
 
-  if (!username) return next(new AppError("Pick a name to go by", 406));
-  if (username.length < 3) return next(new AppError("Use at least 3 characters", 406));
-  if (username.length > 40) return next(new AppError("Keep it under 40 characters", 406));
+  const bad = username_rules.check(username);
+  if (bad) return next(new AppError(bad, 406));
 
-  await account.update({ username });
+  // Excluding this account, so saving the form without changing the name does
+  // not collide with itself. Missing here entirely until now, which meant that
+  // even with registration fixed anyone could rename themselves onto someone.
+  if (await username_rules.taken(username, account.id)) {
+    return next(new AppError("Someone already goes by that name", 409));
+  }
+
+  const updates = { username };
+
+  // Optional, and therefore removable. An empty field means "take it off",
+  // not "leave what was there": a number someone deleted has to actually go,
+  // or the setting is a one-way door.
+  if (req.body.phone !== undefined) {
+    const digits = phone_rules.digits(req.body.phone);
+
+    if (!digits) {
+      updates.phone = null;
+      updates.phoneCountryId = null;
+    } else {
+      const badPhone = phone_rules.check(digits);
+      if (badPhone) return next(new AppError(badPhone, 406));
+
+      // Both parts move together: a number without its country is not dialable.
+      const country = await phone_rules.country(req.body.phoneCountryId);
+      if (!country) return next(new AppError("Pick a country code from the list", 406));
+
+      updates.phone = digits;
+      updates.phoneCountryId = country.id;
+    }
+  }
+
+  await account.update(updates);
 
   return res.status(200).json(publicShape(account));
 });
@@ -161,7 +199,7 @@ exports.uploadAvatar = catchAsync(async (req, res, next) => {
   if (!req.file) return next(new AppError("Choose an image first", 406));
 
   const result = await cloudinary.upload(req.file.buffer, {
-    folder: "plaza/avatars",
+    folder: cloudinary.folders.account(account.id),
     public_id: randomUUID(),
     transformation: [{ width: 256, height: 256, crop: "fill", gravity: "face" }],
   });
@@ -181,16 +219,24 @@ exports.uploadAvatar = catchAsync(async (req, res, next) => {
   return res.status(200).json(publicShape(account));
 });
 
+/**
+ * Removing the photo, not replacing it.
+ *
+ * The folder goes too, not just the file. Uploading writes a fresh public_id
+ * each time so the old one cannot be overwritten, which means a folder can hold
+ * files from earlier failures; clearing the folder is the only way to be sure
+ * nothing of the photograph is left on the server.
+ */
 exports.deleteAvatar = catchAsync(async (req, res) => {
   const account = req.sessionAccount;
 
-  if (account.avatar_id) {
-    await cloudinary.remove(account.avatar_id).catch(err =>
-      console.error("CLOUDINARY: could not remove avatar:", err.message)
-    );
-  }
-
+  // The record is cleared first and unconditionally. Storage that will not
+  // answer must not keep a photo attached to someone who asked to remove it.
   await account.update({ avatar: null, avatar_id: null });
+
+  await cloudinary
+    .removeFolder(cloudinary.folders.account(account.id))
+    .catch(err => console.error("CLOUDINARY: could not clear avatar folder:", err.message));
 
   return res.status(200).json(publicShape(account));
 });

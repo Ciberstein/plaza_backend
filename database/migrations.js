@@ -13,11 +13,22 @@ const COLUMNS = [
   { table: '"market"."shops"', column: 'approvedAt', definition: 'TIMESTAMPTZ' },
   { table: '"market"."shops"', column: 'reviewNote', definition: 'TEXT' },
   { table: '"market"."shops"', column: 'reviewedBy', definition: 'INTEGER' },
+  // Added after the products table existed, so sync will not put them there.
+  { table: '"market"."products"', column: 'condition', definition: 'VARCHAR(255)' },
+  { table: '"market"."products"', column: 'delivery', definition: "VARCHAR(255)[] NOT NULL DEFAULT '{}'" },
+  { table: '"accounts"."accounts"', column: 'phoneCountryId', definition: 'INTEGER' },
+  { table: '"accounts"."accounts"', column: 'phone', definition: 'VARCHAR(255)' },
+  { table: '"market"."suborders"', column: 'accountId', definition: 'INTEGER' },
+  { table: '"market"."suborders"', column: 'cancelledBy', definition: 'VARCHAR(255)' },
+  { table: '"market"."suborders"', column: 'cancelReason', definition: 'TEXT' },
 ];
 
 // The free-text category and city on a shop, replaced by references into
 // market.categories and geo.cities.
 const DROPS = [
+  // Added and taken out the same day. "New" is measured from createdAt, which
+  // is close enough now that creating and publishing is usually one action.
+  { table: '"market"."products"', column: 'publishedAt' },
   { table: '"market"."shops"', column: 'category' },
   { table: '"market"."shops"', column: 'city' },
 ];
@@ -27,7 +38,44 @@ const DROPS = [
 // stays NOT NULL until something says otherwise.
 const NULLABLE = [
   { table: '"market"."products"', column: 'shopId' },
+  // A purchase from someone who has no shop had nowhere to hang.
+  { table: '"market"."suborders"', column: 'shopId' },
 ];
+
+/**
+ * Constraints, which sync never adds to a table that already exists.
+ *
+ * The username index is on LOWER(username), not on the column: two accounts
+ * called "Ana" and "ana" are the same person to every reader, and on a
+ * marketplace where the name sits beside a listing, allowing both is an
+ * impersonation waiting to happen.
+ *
+ * Attempted rather than assumed. A unique index cannot be built over data that
+ * already breaks it, and refusing to boot over historical duplicates would take
+ * the API down for something only a person can decide. It says what is in the
+ * way and applies itself the moment the way is clear.
+ */
+const INDEXES = [
+  {
+    name: "accounts_username_lower_idx",
+    sql: 'CREATE UNIQUE INDEX IF NOT EXISTS "accounts_username_lower_idx" ON "accounts"."accounts" (LOWER("username"));',
+    why: "two accounts already share a username",
+    show: "select lower(username) as name, count(*) from accounts.accounts group by 1 having count(*) > 1;",
+  },
+];
+
+const ensureIndexes = async () => {
+  for (const index of INDEXES) {
+    try {
+      await db.query(index.sql);
+      console.log("[34mMIGRATION:[0m", "[32m" + index.name + " ready[0m");
+    } catch (err) {
+      console.warn("[33mMIGRATION HELD:[0m", index.name, "-", index.why);
+      console.warn("  ", err.message);
+      console.warn("   find them with:", index.show);
+    }
+  }
+};
 
 const ensureColumns = async () => {
   for (const { table, column, definition } of COLUMNS) {
@@ -46,4 +94,4 @@ const ensureColumns = async () => {
   }
 };
 
-module.exports = { ensureColumns };
+module.exports = { ensureColumns, ensureIndexes };

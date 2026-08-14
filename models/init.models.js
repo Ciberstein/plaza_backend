@@ -37,6 +37,17 @@ const init = () => {
     as: "seller",
   });
 
+  // Where the dialling code comes from, so it is read at display time rather
+  // than copied into the account and left to go stale.
+  Geo.Country.hasMany(Accounts.Account, {
+    foreignKey: "phoneCountryId",
+    as: "accounts",
+  });
+  Accounts.Account.belongsTo(Geo.Country, {
+    foreignKey: "phoneCountryId",
+    as: "phoneCountry",
+  });
+
   /* GEOGRAPHY */
 
   Geo.Country.hasMany(Geo.City, { foreignKey: "countryId", as: "cities" });
@@ -59,6 +70,63 @@ const init = () => {
 
   /* MARKET RELATIONSHIPS */
 
+  // Both ends cascade, for the same reason a favourite does: a basket line
+  // pointing at nothing is not a record of anything.
+  Accounts.Account.hasMany(Market.CartItem, {
+    foreignKey: "accountId",
+    as: "cart",
+    onDelete: "CASCADE",
+  });
+  Market.CartItem.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "account",
+  });
+
+  Market.Product.hasMany(Market.CartItem, {
+    foreignKey: "productId",
+    as: "baskets",
+    onDelete: "CASCADE",
+  });
+  Market.CartItem.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
+  // Both ends cascade. A bookmark to a listing that no longer exists is not a
+  // record of anything, and unlike an order it says nothing anyone needs later.
+  Accounts.Account.hasMany(Market.Favourite, {
+    foreignKey: "accountId",
+    as: "favourites",
+    onDelete: "CASCADE",
+  });
+  Market.Favourite.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "account",
+  });
+
+  Market.Product.hasMany(Market.Favourite, {
+    foreignKey: "productId",
+    as: "favourites",
+    onDelete: "CASCADE",
+  });
+  Market.Favourite.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
+  // CASCADE, unlike almost everything else here: a photograph of a listing has
+  // no meaning once the listing is gone, and orphaned rows would keep pointing
+  // at Cloudinary files nothing will ever clean up.
+  Market.Product.hasMany(Market.ProductImage, {
+    foreignKey: "productId",
+    as: "images",
+    onDelete: "CASCADE",
+  });
+  Market.ProductImage.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
   // SET NULL, not CASCADE: closing a shop unbrands its listings, it does not
   // destroy the seller's inventory.
   Market.Shop.hasMany(Market.Product, {
@@ -80,6 +148,16 @@ const init = () => {
   Market.SubOrder.belongsTo(Market.Order, {
     foreignKey: "orderId",
     as: "order",
+  });
+
+  // What a seller has to deal with, whether or not it came through a shop.
+  Accounts.Account.hasMany(Market.SubOrder, {
+    foreignKey: "accountId",
+    as: "sales",
+  });
+  Market.SubOrder.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "seller",
   });
 
   Market.Shop.hasMany(Market.SubOrder, {

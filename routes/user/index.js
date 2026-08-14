@@ -4,6 +4,11 @@ const express = require("express");
 const routes = {
   account: require("./accounts.routes"),
   shops: require("./shops.routes"),
+  products: require("./products.routes"),
+  cart: require("./cart.routes"),
+  favourites: require("./favourites.routes"),
+  orders: require("./orders.routes"),
+  sales: require("./sales.routes"),
 };
 
 // MIDDLEWARES
