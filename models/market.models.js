@@ -36,7 +36,22 @@ const PRODUCT_CONDITION = ["new", "like_new", "good", "acceptable", "for_parts"]
 // most people who will post a parcel will also meet you in a cafe.
 const DELIVERY_OPTION = ["shipping", "door_delivery", "door_pickup", "public_meetup"];
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
-const SUBORDER_STATUS = ["pending", "paid", "shipped", "delivered", "cancelled", "refunded"];
+// No money changes hands online yet, so `paid` sits unused and `confirmed` is
+// the event that matters: the seller saying yes. Both sides may cancel, and
+// either way the stock goes back on the shelf.
+//
+//   pending    the buyer asked, the seller has not answered
+//   confirmed  the seller accepted; they arrange the handover
+//   delivered  done
+//   cancelled  called off by either side
+const SUBORDER_STATUS = [
+  "pending", "confirmed", "paid", "shipped", "delivered", "cancelled", "refunded",
+];
+
+// Either side may call a purchase off, and which one did changes what the other
+// should do about it. "Cancelled" on its own does not say whether the seller
+// backed out or the buyer changed their mind.
+const CANCELLED_BY = ["buyer", "seller"];
 
 // How this seller gets an order to a buyer by default. Set per shop rather than
 // per product because it follows from how the seller works, not from the item.
@@ -313,9 +328,21 @@ const SubOrder = db.define(
       allowNull: false,
       field: "orderId",
     },
-    shopId: {
+    // The seller, and the only thing that has to be there. A suborder used to
+    // hang off a shop, which quietly made every purchase require one — and on
+    // Plaza most people sell under their own name. This mirrors how a product
+    // is built for exactly the same reason.
+    accountId: {
       type: DataTypes.INTEGER,
       allowNull: false,
+      field: "accountId",
+    },
+    // The brand it was bought under, if there was one. One suborder per seller
+    // *and* storefront: the same person selling one thing under their name and
+    // another under their shop is two different counters to walk up to.
+    shopId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
       field: "shopId",
     },
     subtotal: {
@@ -335,6 +362,20 @@ const SubOrder = db.define(
       type: DataTypes.DATE,
       allowNull: true,
       field: "shippedAt",
+    },
+    cancelledBy: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      validate: { isIn: [CANCELLED_BY] },
+      field: "cancelledBy",
+    },
+    // Optional, from either side. Nobody is made to justify themselves, but a
+    // cancellation with a line of explanation is the difference between a dead
+    // end and something the other person can act on.
+    cancelReason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "cancelReason",
     },
   },
   {
@@ -446,7 +487,7 @@ const Market = {
   Shop, Product, ProductImage, Order, SubOrder, OrderItem,
   MAX_PRODUCT_IMAGES,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
-  PRODUCT_CONDITION, DELIVERY_OPTION,
+  PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,
   SHIPPING_MODE,
 };
 

@@ -95,6 +95,16 @@ const init = () => {
     as: "order",
   });
 
+  // What a seller has to deal with, whether or not it came through a shop.
+  Accounts.Account.hasMany(Market.SubOrder, {
+    foreignKey: "accountId",
+    as: "sales",
+  });
+  Market.SubOrder.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "seller",
+  });
+
   Market.Shop.hasMany(Market.SubOrder, {
     foreignKey: "shopId",
     as: "suborders",

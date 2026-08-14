@@ -16,6 +16,9 @@ const COLUMNS = [
   // Added after the products table existed, so sync will not put them there.
   { table: '"market"."products"', column: 'condition', definition: 'VARCHAR(255)' },
   { table: '"market"."products"', column: 'delivery', definition: "VARCHAR(255)[] NOT NULL DEFAULT '{}'" },
+  { table: '"market"."suborders"', column: 'accountId', definition: 'INTEGER' },
+  { table: '"market"."suborders"', column: 'cancelledBy', definition: 'VARCHAR(255)' },
+  { table: '"market"."suborders"', column: 'cancelReason', definition: 'TEXT' },
 ];
 
 // The free-text category and city on a shop, replaced by references into
@@ -30,6 +33,8 @@ const DROPS = [
 // stays NOT NULL until something says otherwise.
 const NULLABLE = [
   { table: '"market"."products"', column: 'shopId' },
+  // A purchase from someone who has no shop had nowhere to hang.
+  { table: '"market"."suborders"', column: 'shopId' },
 ];
 
 const ensureColumns = async () => {

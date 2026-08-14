@@ -5,6 +5,8 @@ const routes = {
   account: require("./accounts.routes"),
   shops: require("./shops.routes"),
   products: require("./products.routes"),
+  orders: require("./orders.routes"),
+  sales: require("./sales.routes"),
 };
 
 // MIDDLEWARES
