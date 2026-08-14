@@ -39,6 +39,21 @@ const Account = db.define(
       validate: { isIn: [ACCOUNT_ROLE] },
       field: "role",
     },
+    // Required of everyone registering, and nullable in the column because the
+    // accounts that existed before it was asked for do not have one. Stored as
+    // bare digits with the country beside it, never as one typed string: the
+    // dialling code belongs to a row in geo.countries that an administrator can
+    // change, and baking it into the number freezes it.
+    phoneCountryId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "phoneCountryId",
+    },
+    phone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "phone",
+    },
     avatar: {
       type: DataTypes.STRING,
       allowNull: true,

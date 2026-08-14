@@ -37,6 +37,17 @@ const init = () => {
     as: "seller",
   });
 
+  // Where the dialling code comes from, so it is read at display time rather
+  // than copied into the account and left to go stale.
+  Geo.Country.hasMany(Accounts.Account, {
+    foreignKey: "phoneCountryId",
+    as: "accounts",
+  });
+  Accounts.Account.belongsTo(Geo.Country, {
+    foreignKey: "phoneCountryId",
+    as: "phoneCountry",
+  });
+
   /* GEOGRAPHY */
 
   Geo.Country.hasMany(Geo.City, { foreignKey: "countryId", as: "cities" });

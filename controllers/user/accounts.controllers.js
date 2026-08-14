@@ -4,6 +4,7 @@ const AppError = require("../../utils/appError.util");
 const Accounts = require("../../models/accounts.models");
 const cloudinary = require("../../utils/cloudinary.util");
 const username_rules = require("../../utils/username.util");
+const phone_rules = require("../../utils/phone.util");
 const { hash, compare } = require("../../utils/hash.util");
 const { issue, redeem } = require("../../utils/codes.util");
 const password_rules = require("../../utils/password.util");
@@ -12,6 +13,10 @@ const templates = require("../../mail/templates");
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// The phone is here because this shape is only ever sent to the person it
+// belongs to. Every other place an account is exposed — a seller beside a
+// listing, a buyer on an order — is built from its own attribute list, and
+// none of them name it.
 const publicShape = (account) => ({
   id: account.id,
   username: account.username,
@@ -19,6 +24,8 @@ const publicShape = (account) => ({
   role: account.role,
   avatar: account.avatar,
   verified: account.verified,
+  phone: account.phone,
+  phoneCountryId: account.phoneCountryId,
   createdAt: account.createdAt,
 });
 
@@ -42,7 +49,31 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
     return next(new AppError("Someone already goes by that name", 409));
   }
 
-  await account.update({ username });
+  const updates = { username };
+
+  // Optional, and therefore removable. An empty field means "take it off",
+  // not "leave what was there": a number someone deleted has to actually go,
+  // or the setting is a one-way door.
+  if (req.body.phone !== undefined) {
+    const digits = phone_rules.digits(req.body.phone);
+
+    if (!digits) {
+      updates.phone = null;
+      updates.phoneCountryId = null;
+    } else {
+      const badPhone = phone_rules.check(digits);
+      if (badPhone) return next(new AppError(badPhone, 406));
+
+      // Both parts move together: a number without its country is not dialable.
+      const country = await phone_rules.country(req.body.phoneCountryId);
+      if (!country) return next(new AppError("Pick a country code from the list", 406));
+
+      updates.phone = digits;
+      updates.phoneCountryId = country.id;
+    }
+  }
+
+  await account.update(updates);
 
   return res.status(200).json(publicShape(account));
 });

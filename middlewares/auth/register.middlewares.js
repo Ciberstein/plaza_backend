@@ -45,6 +45,9 @@ exports.available = catchAsync(async (req, res, next) => {
 exports.create = catchAsync(async (req, res, next) => {
   const { username, email, password } = req.body;
 
+  // No phone here. The email is the contact everybody has to give, and one more
+  // required field on the way in is one more reason not to come in. Adding a
+  // number is a thing to do later, in settings, if they want to be called.
   req.account = await Accounts.Account.create({
     username,
     email,

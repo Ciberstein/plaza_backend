@@ -3,6 +3,7 @@ const AppError = require("../../utils/appError.util");
 const { db } = require("../../database/config");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
+const Geo = require("../../models/geo.models");
 
 /* ─── what an order looks like when it comes back ─────────────────────────── */
 
@@ -12,6 +13,30 @@ const ITEM = {
   attributes: ["id", "productId", "title", "unitPrice", "quantity"],
 };
 
+// Once the two of them have to meet, each has to be able to reach the other.
+const REACHABLE = ["confirmed", "delivered"];
+
+// Everything needed to reach the person, and nothing else about them. Reused
+// by both sides, so neither can quietly grow a field the other does not have.
+const CONTACT = (as) => ({
+  model: Accounts.Account,
+  as,
+  // Fetched for every row and removed from the ones that have not earned it.
+  // Filtering it out of the query would mean a query per status, and getting
+  // that wrong leaks somebody's details; getting this wrong shows nothing.
+  attributes: ["id", "username", "avatar", "email", "phone"],
+  include: [{ model: Geo.Country, as: "phoneCountry", attributes: ["dialCode"], required: false }],
+});
+
+/**
+ * The number, joined to its dialling code, or nothing.
+ *
+ * Joined here rather than stored joined, so an administrator editing a code in
+ * geo.countries corrects every account at once.
+ */
+const dialable = (account) =>
+  account?.phone ? `${account.phoneCountry?.dialCode ?? ""}${account.phone}` : null;
+
 const BUYER_VIEW = [
   {
     model: Market.SubOrder,
@@ -20,15 +45,66 @@ const BUYER_VIEW = [
     include: [
       ITEM,
       { model: Market.Shop, as: "shop", attributes: ["id", "name", "slug", "logo"], required: false },
-      { model: Accounts.Account, as: "seller", attributes: ["id", "username", "avatar"] },
+      CONTACT("seller"),
     ],
   },
 ];
 
+/**
+ * Contact details, once and only once there is a reason for them.
+ *
+ * A pending order is a request the seller has not answered; handing over a
+ * number at that point would turn placing an order into a way of harvesting
+ * them. A cancelled one is over. Between confirmed and delivered there are two
+ * people who have to arrange a handover, and no way to do it.
+ *
+ * Both directions, because coordinating takes two: a seller who cannot warn
+ * the buyer they are running late has half a phone line.
+ */
+const contact = (account, status) => {
+  const open = REACHABLE.includes(status);
+
+  return {
+    ...(account ?? {}),
+    // The email is the one everybody has, so it is the one that is always
+    // there once there is a reason. The number is extra, and only some people
+    // added one.
+    email: open ? (account?.email ?? null) : null,
+    phone: open ? dialable(account) : null,
+    phoneCountry: undefined,
+  };
+};
+
+const revealPhones = (order) => {
+  const plain = order.toJSON();
+
+  plain.suborders = (plain.suborders ?? []).map(part => ({
+    ...part,
+    seller: contact(part.seller, part.status),
+  }));
+
+  return plain;
+};
+
+/** The same, seen from the seller's side of the same row. */
+const revealBuyer = (suborder) => {
+  const plain = suborder.toJSON();
+
+  return {
+    ...plain,
+    order: plain.order && {
+      ...plain.order,
+      buyer: contact(plain.order.buyer, plain.status),
+    },
+  };
+};
+
 const ORDER_ATTRS = ["id", "total", "currency", "status", "paidAt", "createdAt"];
 
-const reload = (id) =>
-  Market.Order.findByPk(id, { attributes: ORDER_ATTRS, include: BUYER_VIEW });
+const reload = async (id) =>
+  revealPhones(
+    await Market.Order.findByPk(id, { attributes: ORDER_ATTRS, include: BUYER_VIEW }),
+  );
 
 /**
  * An order is done when every part of it is, and called off when every part was.
@@ -167,7 +243,7 @@ exports.list = catchAsync(async (req, res) => {
     order: [["createdAt", "DESC"]],
   });
 
-  return res.status(200).json(orders);
+  return res.status(200).json(orders.map(revealPhones));
 });
 
 exports.get = catchAsync(async (req, res) => {
@@ -176,9 +252,19 @@ exports.get = catchAsync(async (req, res) => {
 
 /* ─── calling it off ──────────────────────────────────────────────────────── */
 
-// Everything still open. A part already delivered is history, and cancelling
-// history is a refund, which is a different thing this does not do yet.
-const OPEN = ["pending", "confirmed"];
+/**
+ * Who may still call it off, and when.
+ *
+ * The two are not symmetric on purpose. Until the seller answers, nothing has
+ * been committed to and the buyer may walk away. Once they accept, the seller
+ * has set stock aside and may have turned down someone else for it, so the
+ * buyer is held to it and only the seller can release them.
+ *
+ * A delivered part is history either way, and undoing history is a refund,
+ * which is a different thing this does not do yet.
+ */
+const BUYER_MAY_CANCEL = ["pending"];
+const SELLER_MAY_CANCEL = ["pending", "confirmed"];
 
 /**
  * Putting the stock back.
@@ -241,7 +327,16 @@ exports.cancelAsBuyer = catchAsync(async (req, res, next) => {
 
   if (!suborder) return next(new AppError("That part of the order does not exist", 404));
 
-  if (!OPEN.includes(suborder.status)) {
+  if (suborder.status === "confirmed") {
+    return next(
+      new AppError(
+        "The seller already accepted this order. Only they can cancel it now.",
+        409,
+      )
+    );
+  }
+
+  if (!BUYER_MAY_CANCEL.includes(suborder.status)) {
     return next(new AppError(`This part is ${suborder.status} and cannot be cancelled`, 409));
   }
 
@@ -259,7 +354,7 @@ const SELLER_VIEW = [
     model: Market.Order,
     as: "order",
     attributes: ["id", "currency", "createdAt"],
-    include: [{ model: Accounts.Account, as: "buyer", attributes: ["id", "username", "avatar"] }],
+    include: [CONTACT("buyer")],
   },
 ];
 
@@ -267,8 +362,10 @@ const SUBORDER_ATTRS = [
   "id", "orderId", "shopId", "subtotal", "status", "cancelledBy", "cancelReason", "createdAt",
 ];
 
-const reloadSale = (id) =>
-  Market.SubOrder.findByPk(id, { attributes: SUBORDER_ATTRS, include: SELLER_VIEW });
+const reloadSale = async (id) =>
+  revealBuyer(
+    await Market.SubOrder.findByPk(id, { attributes: SUBORDER_ATTRS, include: SELLER_VIEW }),
+  );
 
 exports.sales = catchAsync(async (req, res) => {
   const sales = await Market.SubOrder.findAll({
@@ -278,7 +375,7 @@ exports.sales = catchAsync(async (req, res) => {
     order: [["createdAt", "DESC"]],
   });
 
-  return res.status(200).json(sales);
+  return res.status(200).json(sales.map(revealBuyer));
 });
 
 exports.confirm = catchAsync(async (req, res, next) => {
@@ -305,7 +402,7 @@ exports.deliver = catchAsync(async (req, res, next) => {
 
 /** The seller backing out. Same rules, same stock returned, other name on it. */
 exports.cancelAsSeller = catchAsync(async (req, res, next) => {
-  if (!OPEN.includes(req.suborder.status)) {
+  if (!SELLER_MAY_CANCEL.includes(req.suborder.status)) {
     return next(new AppError(`This order is ${req.suborder.status} and cannot be cancelled`, 409));
   }
 
