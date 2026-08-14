@@ -9,7 +9,8 @@ const { Category } = require("../../models/categories.models");
 // of it, and neither is anything about how the row was made.
 const PUBLIC_ATTRS = [
   "id", "shopId", "categoryId", "cityId",
-  "title", "description", "price", "currency", "stock", "createdAt",
+  "title", "description", "price", "currency", "stock",
+  "condition", "delivery", "createdAt",
 ];
 
 // Who is selling it. A listing carries a shop or it carries a person, never

@@ -13,6 +13,9 @@ const COLUMNS = [
   { table: '"market"."shops"', column: 'approvedAt', definition: 'TIMESTAMPTZ' },
   { table: '"market"."shops"', column: 'reviewNote', definition: 'TEXT' },
   { table: '"market"."shops"', column: 'reviewedBy', definition: 'INTEGER' },
+  // Added after the products table existed, so sync will not put them there.
+  { table: '"market"."products"', column: 'condition', definition: 'VARCHAR(255)' },
+  { table: '"market"."products"', column: 'delivery', definition: "VARCHAR(255)[] NOT NULL DEFAULT '{}'" },
 ];
 
 // The free-text category and city on a shop, replaced by references into

@@ -10,7 +10,10 @@ const Geo = require("../../models/geo.models");
 const PRICE = /^\d{1,10}(\.\d{1,2})?$/;
 
 exports.validate = catchAsync(async (req, res, next) => {
-  const { title, price, stock, categoryId, cityId, shopId } = req.body;
+  const { title, price, stock, categoryId, cityId, shopId, condition, delivery } = req.body;
+  // A new listing has to arrive complete. A patch may carry one field, so
+  // absence means "leave it" there and "missing" only here.
+  const creating = req.method === "POST";
 
   if (!title?.trim()) return next(new AppError("Give the listing a title", 406));
   if (title.trim().length < 3) return next(new AppError("The title is too short", 406));
@@ -24,6 +27,28 @@ exports.validate = catchAsync(async (req, res, next) => {
 
   if (stock !== undefined && (!Number.isInteger(Number(stock)) || Number(stock) < 0))
     return next(new AppError("Stock has to be zero or a whole number", 406));
+
+  // Never defaulted, so it has to be asked for. Everything second-hand would
+  // otherwise be published as new by whoever did not scroll to this field.
+  if (creating && !condition) return next(new AppError("Say what condition it is in", 406));
+
+  if (condition !== undefined && !Market.PRODUCT_CONDITION.includes(condition))
+    return next(new AppError("Pick a condition from the list", 406));
+
+  if (creating && (!Array.isArray(delivery) || !delivery.length))
+    return next(new AppError("Pick at least one way to hand it over", 406));
+
+  if (delivery !== undefined) {
+    if (!Array.isArray(delivery))
+      return next(new AppError("Pick at least one way to hand it over", 406));
+
+    const unknown = delivery.filter(option => !Market.DELIVERY_OPTION.includes(option));
+    if (unknown.length)
+      return next(new AppError("Pick delivery options from the list", 406));
+
+    // Deduplicated here so the column never holds the same answer twice.
+    req.body.delivery = [...new Set(delivery)];
+  }
 
   // Checked against the same rows /public/meta serves the form, so a value the
   // form could not have offered is rejected before it reaches the model.
@@ -91,7 +116,9 @@ exports.publishable = catchAsync(async (req, res, next) => {
   }
 
   if (!product.categoryId) problems.push("pick a category");
-  if (!product.cityId) problems.push("say where it ships from");
+  if (!product.cityId) problems.push("say where it is");
+  if (!product.condition) problems.push("say what condition it is in");
+  if (!product.delivery?.length) problems.push("pick at least one way to hand it over");
 
   // A listing cannot carry a brand that the square cannot see. Left until now
   // so a seller can prepare listings while their shop is still in review.

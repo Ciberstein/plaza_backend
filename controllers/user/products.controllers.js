@@ -5,8 +5,18 @@ const Market = require("../../models/market.models");
 
 const PRODUCT_ATTRS = [
   "id", "shopId", "categoryId", "cityId",
-  "title", "description", "price", "currency", "stock", "status", "createdAt",
+  "title", "description", "price", "currency", "stock", "status",
+  "condition", "delivery", "createdAt",
 ];
+
+// The two states a seller may choose between. Out of stock is not among them:
+// it is a fact about the shelf, not a decision, and letting someone select it
+// while holding stock would make the word mean nothing.
+const CHOOSABLE = ["active", "paused"];
+
+// A listing that has been published at least once, and so has an availability
+// worth setting. A draft has nowhere to be available.
+const LISTED = ["active", "paused", "out_of_stock"];
 
 const IMAGE_ATTRS = ["id", "url", "position"];
 
@@ -29,9 +39,13 @@ const reload = (id) =>
  * who archived something does not want it back because a number moved.
  */
 const stockStatus = (status, stock) => {
-  if (status === "active" && Number(stock) === 0) return "out_of_stock";
-  if (status === "out_of_stock" && Number(stock) > 0) return "active";
-  return status;
+  // Drafts and archived listings are deliberate states. A number moving is not
+  // a reason to drag something back out of a drawer someone put it in.
+  if (!LISTED.includes(status)) return status;
+
+  if (Number(stock) === 0) return "out_of_stock";
+
+  return status === "out_of_stock" ? "active" : status;
 };
 
 exports.list = catchAsync(async (req, res) => {
@@ -50,7 +64,10 @@ exports.get = catchAsync(async (req, res) => {
 });
 
 exports.create = catchAsync(async (req, res) => {
-  const { title, description, price, stock, categoryId, cityId, shopId, currency } = req.body;
+  const {
+    title, description, price, stock, categoryId, cityId, shopId, currency,
+    condition, delivery,
+  } = req.body;
 
   const product = await Market.Product.create({
     accountId: req.sessionAccount.id,
@@ -62,6 +79,8 @@ exports.create = catchAsync(async (req, res) => {
     price: price ?? 0,
     currency: currency || "COP",
     stock: stock ?? 0,
+    condition: condition ?? null,
+    delivery: delivery ?? [],
     // Draft, not active: nothing reaches the square before its photographs do.
     status: "draft",
   });
@@ -69,8 +88,11 @@ exports.create = catchAsync(async (req, res) => {
   return res.status(201).json(await reload(product.id));
 });
 
-exports.update = catchAsync(async (req, res) => {
-  const { title, description, price, stock, categoryId, cityId, shopId, currency } = req.body;
+exports.update = catchAsync(async (req, res, next) => {
+  const {
+    title, description, price, stock, categoryId, cityId, shopId, currency,
+    condition, delivery, availability,
+  } = req.body;
   const updates = {};
 
   if (title?.trim()) updates.title = title.trim();
@@ -81,13 +103,33 @@ exports.update = catchAsync(async (req, res) => {
   if (cityId !== undefined) updates.cityId = cityId || null;
   if (shopId !== undefined) updates.shopId = shopId || null;
 
-  if (stock !== undefined) {
-    updates.stock = stock;
-    updates.status = stockStatus(req.product.status, stock);
+  if (condition !== undefined) updates.condition = condition || null;
+  if (delivery !== undefined) updates.delivery = delivery;
+  if (stock !== undefined) updates.stock = stock;
+
+  // Pausing and unpausing is the one status change that belongs on the form,
+  // because to the seller it is a property of the listing rather than an event.
+  // Publishing and archiving stay endpoints of their own: each has a rule.
+  if (availability !== undefined) {
+    if (!CHOOSABLE.includes(availability)) {
+      return next(new AppError("A listing is either available or paused", 406));
+    }
+
+    if (!LISTED.includes(req.product.status)) {
+      return next(new AppError("Publish the listing before setting its availability", 409));
+    }
+
+    updates.status = availability;
   }
 
-  // `status` is deliberately absent from what a body may set. The transitions a
-  // seller is allowed live in their own endpoints, each with its own rule.
+  // The shelf has the last word. Whatever the seller chose, nothing with zero
+  // stock is available, and this runs after their choice rather than instead
+  // of it so the refusal is the stock's and not a silently ignored field.
+  updates.status = stockStatus(
+    updates.status ?? req.product.status,
+    updates.stock ?? req.product.stock,
+  );
+
   await req.product.update(updates);
 
   return res.status(200).json(await reload(req.product.id));

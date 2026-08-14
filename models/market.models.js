@@ -16,7 +16,25 @@ const { db } = require("../database/config");
 //   suspended moderation decision taken after approval
 //   closed    the owner took it down
 const SHOP_STATUS = ["draft", "pending", "rejected", "active", "suspended", "closed"];
-const PRODUCT_STATUS = ["draft", "active", "out_of_stock", "archived"];
+// paused is the seller's own decision to hide a listing; out_of_stock is not a
+// decision at all. Keeping them apart is what lets the interface say which of
+// the two happened instead of one word that could mean either.
+//
+//   draft         never published, only the seller sees it
+//   active        on the square
+//   paused        the seller took it down for now
+//   out_of_stock  nothing left to sell, set and cleared by the stock alone
+//   archived      put away, not expected back soon
+const PRODUCT_STATUS = ["draft", "active", "paused", "out_of_stock", "archived"];
+
+// How worn the thing is. Required of every listing and never defaulted: a
+// default here would mark everything second-hand as new by inattention, which
+// is precisely the lie the field exists to prevent.
+const PRODUCT_CONDITION = ["new", "like_new", "good", "acceptable", "for_parts"];
+
+// How the seller is willing to hand the thing over. Several at once, because
+// most people who will post a parcel will also meet you in a cafe.
+const DELIVERY_OPTION = ["shipping", "door_delivery", "door_pickup", "public_meetup"];
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
 const SUBORDER_STATUS = ["pending", "paid", "shipped", "delivered", "cancelled", "refunded"];
 
@@ -196,6 +214,31 @@ const Product = db.define(
       defaultValue: "draft",
       validate: { isIn: [PRODUCT_STATUS] },
       field: "status",
+    },
+    // Nullable in the column, required by the form. Rows written before the
+    // field existed have none, and backfilling them with a guess would be
+    // inventing a fact about someone else's goods.
+    condition: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      validate: { isIn: [PRODUCT_CONDITION] },
+      field: "condition",
+    },
+    // A Postgres array rather than a join table: the set is fixed, short, and
+    // never queried on its own. A table would be four rows of ceremony per
+    // listing to store what is really one answer.
+    delivery: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      allowNull: false,
+      defaultValue: [],
+      validate: {
+        known(value) {
+          if (!Array.isArray(value)) throw new Error("Delivery must be a list");
+          const bad = value.filter(v => !DELIVERY_OPTION.includes(v));
+          if (bad.length) throw new Error(`Unknown delivery option: ${bad.join(", ")}`);
+        },
+      },
+      field: "delivery",
     },
   },
   {
@@ -403,6 +446,7 @@ const Market = {
   Shop, Product, ProductImage, Order, SubOrder, OrderItem,
   MAX_PRODUCT_IMAGES,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
+  PRODUCT_CONDITION, DELIVERY_OPTION,
   SHIPPING_MODE,
 };
 
