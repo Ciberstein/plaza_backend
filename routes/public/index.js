@@ -3,6 +3,7 @@ const express = require("express");
 // ROUTES
 const routes = {
   shops: require("./shops.routes"),
+  products: require("./products.routes"),
   meta: require("./meta.routes"),
 };
 

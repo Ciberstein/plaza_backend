@@ -59,6 +59,19 @@ const init = () => {
 
   /* MARKET RELATIONSHIPS */
 
+  // CASCADE, unlike almost everything else here: a photograph of a listing has
+  // no meaning once the listing is gone, and orphaned rows would keep pointing
+  // at Cloudinary files nothing will ever clean up.
+  Market.Product.hasMany(Market.ProductImage, {
+    foreignKey: "productId",
+    as: "images",
+    onDelete: "CASCADE",
+  });
+  Market.ProductImage.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
   // SET NULL, not CASCADE: closing a shop unbrands its listings, it does not
   // destroy the seller's inventory.
   Market.Shop.hasMany(Market.Product, {

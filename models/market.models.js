@@ -346,8 +346,62 @@ const OrderItem = db.define(
   }
 );
 
+// A listing's photographs, in the order the seller arranged them.
+//
+// Its own table rather than a column on the product: a listing needs several
+// photographs, the seller reorders them, and each one is a file in Cloudinary
+// that has to be destroyed individually when it goes. None of that survives
+// being an array inside a row.
+const ProductImage = db.define(
+  "product_images",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    url: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      field: "url",
+    },
+    // Cloudinary's handle for the file. Kept so removing the row can destroy
+    // the asset with it, the same way a shop logo does.
+    publicId: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      field: "publicId",
+    },
+    // Zero is the cover. Explicit rather than "whichever row comes back first",
+    // because without an ORDER BY the database returns them in whatever order
+    // suits it, and the cover would change between requests.
+    position: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+      field: "position",
+    },
+  },
+  {
+    tableName: "product_images",
+    schema: "market",
+  }
+);
+
+// How many photographs one listing may carry. Enforced in the middleware; kept
+// here so the limit is stated next to the thing it limits.
+const MAX_PRODUCT_IMAGES = 8;
+
 const Market = {
-  Shop, Product, Order, SubOrder, OrderItem,
+  Shop, Product, ProductImage, Order, SubOrder, OrderItem,
+  MAX_PRODUCT_IMAGES,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
   SHIPPING_MODE,
 };

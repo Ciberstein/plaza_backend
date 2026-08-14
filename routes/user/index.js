@@ -4,6 +4,7 @@ const express = require("express");
 const routes = {
   account: require("./accounts.routes"),
   shops: require("./shops.routes"),
+  products: require("./products.routes"),
 };
 
 // MIDDLEWARES
