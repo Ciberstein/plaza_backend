@@ -483,8 +483,91 @@ const ProductImage = db.define(
 // here so the limit is stated next to the thing it limits.
 const MAX_PRODUCT_IMAGES = 8;
 
+/**
+ * A basket, on the server.
+ *
+ * It lived in the browser first, which was wrong the moment pausing a listing
+ * had to empty it out of every basket holding it: nothing on this side can
+ * reach into someone else's localStorage. A row per person per listing can be
+ * deleted by whoever needs it gone.
+ *
+ * Quantity lives here rather than being a row per unit, because a basket is a
+ * statement of intent and "three of these" is one intent.
+ */
+const CartItem = db.define(
+  "cart_items",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    quantity: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1,
+      field: "quantity",
+    },
+  },
+  {
+    tableName: "cart_items",
+    schema: "market",
+    indexes: [{ unique: true, fields: ["accountId", "productId"] }],
+  }
+);
+
+/**
+ * Something someone wants to come back to.
+ *
+ * A join table and nothing else: no note, no list name, no position. Wanting
+ * something later is one bit of information, and the moment a favourite grows
+ * fields it stops being a bookmark and becomes a feature nobody asked for.
+ *
+ * The pair is unique, so favouriting twice is the same as favouriting once and
+ * the database says so rather than the endpoint remembering to.
+ */
+const Favourite = db.define(
+  "favourites",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+  },
+  {
+    tableName: "favourites",
+    schema: "market",
+    indexes: [{ unique: true, fields: ["accountId", "productId"] }],
+  }
+);
+
 const Market = {
-  Shop, Product, ProductImage, Order, SubOrder, OrderItem,
+  Shop, Product, ProductImage, Favourite, CartItem, Order, SubOrder, OrderItem,
   MAX_PRODUCT_IMAGES,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
   PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,

@@ -59,6 +59,18 @@ const stockStatus = (status, stock) => {
   return status === "out_of_stock" ? "active" : status;
 };
 
+/**
+ * A listing that stops being on sale leaves every basket holding it.
+ *
+ * The seller's decision reaches other people's baskets, which is the whole
+ * reason the basket is a table and not something in their browser. Nobody gets
+ * to the last step of an order and is told the thing was withdrawn an hour ago.
+ *
+ * Silent when there is nothing to remove, which is the common case.
+ */
+const dropFromBaskets = (productId) =>
+  Market.CartItem.destroy({ where: { productId } });
+
 exports.list = catchAsync(async (req, res) => {
   const products = await Market.Product.findAll({
     where: { accountId: req.sessionAccount.id },
@@ -144,6 +156,9 @@ exports.update = catchAsync(async (req, res, next) => {
 
   await req.product.update(updates);
 
+  // Paused, out of stock, or anything else that is not on sale.
+  if (updates.status !== "active") await dropFromBaskets(req.product.id);
+
   return res.status(200).json(await reload(req.product.id));
 });
 
@@ -176,6 +191,7 @@ exports.archive = catchAsync(async (req, res, next) => {
   }
 
   await product.update({ status: "archived" });
+  await dropFromBaskets(product.id);
 
   return res.status(200).json(await reload(product.id));
 });

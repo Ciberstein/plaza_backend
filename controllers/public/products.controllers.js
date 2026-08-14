@@ -9,7 +9,7 @@ const { Category } = require("../../models/categories.models");
 // of it, and neither is anything about how the row was made.
 const PUBLIC_ATTRS = [
   "id", "shopId", "categoryId", "cityId",
-  "title", "description", "price", "currency", "stock",
+  "title", "description", "price", "currency", "stock", "status",
   "condition", "delivery", "createdAt",
 ];
 
@@ -28,6 +28,12 @@ const SHOP = {
   required: false,
 };
 
+// How many photographs a card carries. Enough to flick through on the grid
+// without turning a page of results into a page of images: a listing may hold
+// eight, and forty-eight listings holding eight is not a payload, it is a
+// download.
+const SHOTS_IN_GRID = 5;
+
 // A page of results. Capped rather than trusted: `?limit=100000` is a way to
 // ask the database to do the client's work.
 const page = (query) => {
@@ -36,17 +42,30 @@ const page = (query) => {
   return { limit, offset };
 };
 
+// A listing is only ever reachable at all if the brand behind it is open.
+// Closing a shop has to take its listings off the square, and without this a
+// suspended brand keeps selling.
+const brandOpen = [{ shopId: null }, { "$shop.status$": "active" }];
+
 /**
- * A listing is visible when it is active AND either it is sold by a person or
- * the shop it is branded with is open.
- *
- * The second half is the part that is easy to forget: closing a shop has to
- * take its listings off the square, and without this a suspended brand keeps
- * selling.
+ * On the square: what browsing and searching can turn up.
  */
-const visible = {
+const listed = {
   status: "active",
-  [Op.or]: [{ shopId: null }, { "$shop.status$": "active" }],
+  [Op.or]: brandOpen,
+};
+
+/**
+ * Reachable by its own address, which is a wider door.
+ *
+ * A paused listing is not offered anywhere, but it is not gone either: someone
+ * who bookmarked it or was sent the link should find it and be told it is
+ * paused, rather than be told it never existed. Anything else — draft, out of
+ * stock, archived — is not the public's business at all.
+ */
+const addressable = {
+  status: { [Op.in]: ["active", "paused"] },
+  [Op.or]: brandOpen,
 };
 
 // A parent category means its children too. Someone browsing "Home" expects
@@ -64,7 +83,7 @@ const categoryIds = async (slug) => {
 };
 
 exports.list = catchAsync(async (req, res, next) => {
-  const where = { ...visible };
+  const where = { ...listed };
 
   if (req.query.cityId) where.cityId = req.query.cityId;
   if (req.query.shopId) where.shopId = req.query.shopId;
@@ -100,27 +119,44 @@ exports.list = catchAsync(async (req, res, next) => {
     subQuery: false,
   });
 
-  // The covers in one more query rather than joining a second hasMany onto a
-  // limited select, which is what turns one page of results into a cartesian
+  // The photographs in one more query rather than joining a second hasMany onto
+  // a limited select, which is what turns one page of results into a cartesian
   // product of rows.
-  const covers = await Market.ProductImage.findAll({
-    where: { productId: products.map(p => p.id), position: 0 },
-    attributes: ["productId", "url"],
+  //
+  // All of them now, not only the cover: a card you can flick through without
+  // opening it is the difference between browsing and clicking back and forth.
+  const shots = await Market.ProductImage.findAll({
+    where: { productId: products.map(p => p.id) },
+    attributes: ["id", "productId", "url"],
+    order: [["productId", "ASC"], ["position", "ASC"]],
   });
 
-  const coverOf = new Map(covers.map(c => [c.productId, c.url]));
+  const byProduct = new Map();
+
+  for (const shot of shots) {
+    const held = byProduct.get(shot.productId) ?? [];
+    if (held.length < SHOTS_IN_GRID) held.push({ id: shot.id, url: shot.url });
+    byProduct.set(shot.productId, held);
+  }
 
   return res.status(200).json(
-    products.map(product => ({
-      ...product.toJSON(),
-      cover: coverOf.get(product.id) ?? null,
-    }))
+    products.map(product => {
+      const images = byProduct.get(product.id) ?? [];
+
+      return {
+        ...product.toJSON(),
+        images,
+        // Kept alongside the list so nothing that only wanted one photograph
+        // has to learn about the other four.
+        cover: images[0]?.url ?? null,
+      };
+    })
   );
 });
 
 exports.get = catchAsync(async (req, res, next) => {
   const product = await Market.Product.findOne({
-    where: { id: req.params.id, ...visible },
+    where: { id: req.params.id, ...addressable },
     attributes: PUBLIC_ATTRS,
     include: [
       SHOP,

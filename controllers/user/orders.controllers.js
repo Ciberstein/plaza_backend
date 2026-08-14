@@ -142,6 +142,17 @@ exports.create = catchAsync(async (req, res) => {
       }
     }
 
+    // What was just ordered leaves the basket. Buying now clears the line if
+    // one happened to be there, and a basket checkout empties itself, without
+    // the page having to remember to ask.
+    await Market.CartItem.destroy({
+      where: {
+        accountId: req.sessionAccount.id,
+        productId: basket.map(line => line.product.id),
+      },
+      transaction: tx,
+    });
+
     return created;
   });
 

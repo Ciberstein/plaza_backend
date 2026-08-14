@@ -3,6 +3,7 @@ const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Accounts = require("../../models/accounts.models");
 const cloudinary = require("../../utils/cloudinary.util");
+const username_rules = require("../../utils/username.util");
 const { hash, compare } = require("../../utils/hash.util");
 const { issue, redeem } = require("../../utils/codes.util");
 const password_rules = require("../../utils/password.util");
@@ -31,9 +32,15 @@ exports.updateProfile = catchAsync(async (req, res, next) => {
   const account = req.sessionAccount;
   const username = String(req.body.username || "").trim();
 
-  if (!username) return next(new AppError("Pick a name to go by", 406));
-  if (username.length < 3) return next(new AppError("Use at least 3 characters", 406));
-  if (username.length > 40) return next(new AppError("Keep it under 40 characters", 406));
+  const bad = username_rules.check(username);
+  if (bad) return next(new AppError(bad, 406));
+
+  // Excluding this account, so saving the form without changing the name does
+  // not collide with itself. Missing here entirely until now, which meant that
+  // even with registration fixed anyone could rename themselves onto someone.
+  if (await username_rules.taken(username, account.id)) {
+    return next(new AppError("Someone already goes by that name", 409));
+  }
 
   await account.update({ username });
 
