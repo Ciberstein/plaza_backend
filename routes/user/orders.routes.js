@@ -31,4 +31,12 @@ router.post(
   controllers.orders.cancelAsBuyer
 );
 
+// The buyer's own way to close a part. Until this existed only the seller
+// could, which made them the keeper of the door that ratings open behind.
+router.post(
+  "/:id/parts/:subOrderId/received",
+  middlewares.orders.purchased,
+  controllers.orders.markReceived
+);
+
 module.exports = router;

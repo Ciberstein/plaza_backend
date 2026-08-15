@@ -21,4 +21,8 @@ router.get("/:id", controllers.products.get);
 // one needs a session and lives under /user/questions.
 router.get("/:id/questions", controllers.products.questions);
 
+// What buyers who received it thought. Public for the same reason the answers
+// are: it is part of what the listing tells you.
+router.get("/:id/reviews", controllers.products.reviews);
+
 module.exports = router;

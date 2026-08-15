@@ -239,6 +239,17 @@ const orderCancelled = ({ to, byBuyer, items, subtotal, currency, reason }) => (
   `),
 });
 
+/** To the seller: the buyer says it arrived, which closes the transaction. */
+const orderReceived = ({ seller, items, subtotal, currency }) => ({
+  subject: "The buyer confirmed they received it",
+  html: layout("Your order is complete", `
+    ${paragraph(`Hi ${escape(seller)}, the buyer confirmed they received this order for ${money(subtotal, currency)}.`)}
+    ${lines(items, currency)}
+    ${paragraph("That closes it. They can now leave you a rating, which sits on everything you sell.")}
+    ${note("If this is not right, reply to this email and tell us.")}
+  `),
+});
+
 /* ─── questions ───────────────────────────────────────────────────────────
    Both sides of a question, and neither of them says who the other is.
 
@@ -275,6 +286,7 @@ module.exports = {
   orderReceipt,
   orderConfirmed,
   orderDelivered,
+  orderReceived,
   orderCancelled,
   questionAsked,
   questionAnswered,

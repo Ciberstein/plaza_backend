@@ -136,6 +136,7 @@ GET    /public/products          kind, q, category, cityId, shopId, limit, offse
                                  kind is good (default) or service
 GET    /public/products/:id
 GET    /public/products/:id/questions
+GET    /public/products/:id/reviews
 GET    /public/shops
 GET    /public/shops/:slug
 ```
@@ -174,6 +175,11 @@ POST   /user/favourites/:productId    DELETE to unsave
 GET    /user/orders              POST to place one
 GET    /user/orders/:id
 POST   /user/orders/:id/parts/:subOrderId/cancel
+POST   /user/orders/:id/parts/:subOrderId/received
+
+GET    /user/ratings/mine        what this person has already rated
+POST   /user/ratings/seller      subOrderId, stars, comment
+POST   /user/ratings/product     productId, stars, body
 
 GET    /user/sales
 POST   /user/sales/:id/confirm
@@ -285,6 +291,38 @@ unfound. One per parent rather than one at the top, because a single global
 catch-all is a drawer nobody opens while "Tecnología → Otros" still turns up
 for anyone browsing technology. The seeder appends it rather than the data
 files listing it, so a category added later cannot be left without one.
+
+**Either side can close a purchase, and that is what makes ratings mean
+anything.** Only the seller could mark one delivered, which put them in charge
+of the door reputation opens behind — and the seller likeliest to leave it shut
+is the one about to be rated badly. `POST /user/orders/:id/parts/:id/received`
+is the buyer's own way, landing on the same `delivered` status: there is no
+"delivered by them" and "received by me" to reconcile later.
+
+**Nothing about a rating is taken on the rater's word.** A seller rating hangs
+off the suborder, uniquely, and that one column does three jobs: it proves the
+transaction happened, it names who is being rated, and being unique it is what
+stops the same purchase being rated twice. A product review checks a delivered
+order line for that listing on that account. An entry condition the reviewer
+can assert is a review system with no information in it.
+
+**Ratings cannot be edited, and that is a feature.** An editable rating is one
+a seller can lean on a buyer to revise, and the person a reputation system has
+to protect first is the one telling the truth about a bad experience. A second
+attempt is refused rather than overwriting.
+
+**Two tables, because they aggregate onto different things.** A seller rating
+is about conduct and averages onto an account; a review is about whether an
+object is any good and averages onto a listing. Unlike the products/services
+case, nothing else points at either, so there is no shared machinery to be
+gained by merging them — only a nullable column meaning "this one is about the
+person". Reviews are unique per account and product rather than per purchase:
+somebody who buys the same coffee four times has one opinion of it.
+
+**Averages are one grouped query, never one per row.** A page of forty-eight
+cards each asking for its own average is forty-eight round trips to answer
+something the database totals in a single pass, and the result is rounded to
+one decimal — nobody chooses between sellers on the second.
 
 **A question's answer is a column, not another question.** `product_questions`
 holds the seller's reply in `answer` and `answeredAt` rather than in a second

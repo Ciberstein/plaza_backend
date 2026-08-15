@@ -10,6 +10,7 @@ const routes = {
   orders: require("./orders.routes"),
   sales: require("./sales.routes"),
   questions: require("./questions.routes"),
+  ratings: require("./ratings.routes"),
 };
 
 // MIDDLEWARES

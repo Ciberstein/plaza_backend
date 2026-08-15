@@ -546,6 +546,57 @@ exports.confirm = catchAsync(async (req, res, next) => {
   return res.status(200).json(await reloadSale(req.suborder.id));
 });
 
+/**
+ * The buyer saying it arrived.
+ *
+ * Until this existed the only way a purchase could reach `delivered` was the
+ * seller marking it so, which made them the sole keeper of the door that
+ * ratings open behind — and the seller most likely to leave it shut is
+ * precisely the one about to be rated badly. It is also a gap on its own
+ * terms: a buyer had no way at all to say the thing turned up.
+ *
+ * Either side may close it, and both land on the same status. There is no
+ * "delivered by them" and "received by me" to reconcile later; the transaction
+ * is over the moment either party says it is.
+ */
+exports.markReceived = catchAsync(async (req, res, next) => {
+  const suborder = await Market.SubOrder.findOne({
+    where: { id: req.params.subOrderId, orderId: req.order.id },
+  });
+
+  if (!suborder) return next(new AppError("That part of the order does not exist", 404));
+
+  if (suborder.status === "delivered") {
+    // Idempotent: two taps on a slow connection is one arrival.
+    return res.status(200).json(await reload(req.order.id));
+  }
+
+  if (suborder.status !== "confirmed") {
+    return next(
+      new AppError(`This part is ${suborder.status} and cannot be marked as received`, 409)
+    );
+  }
+
+  await suborder.update({ status: "delivered" });
+  await rollUp(suborder.orderId);
+
+  const who = await partiesOf(suborder.id);
+
+  if (who) {
+    tell(
+      who.seller?.email,
+      templates.orderReceived({
+        seller: who.seller?.username,
+        items: linesOf(who.part),
+        subtotal: who.part.subtotal,
+        currency: who.currency,
+      }),
+    );
+  }
+
+  return res.status(200).json(await reload(req.order.id));
+});
+
 exports.deliver = catchAsync(async (req, res, next) => {
   if (req.suborder.status !== "confirmed") {
     return next(new AppError("Confirm the order before marking it delivered", 409));

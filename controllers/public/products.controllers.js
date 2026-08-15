@@ -1,4 +1,4 @@
-const { Op } = require("sequelize");
+const { Op, fn, col } = require("sequelize");
 const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
@@ -67,6 +67,42 @@ const addressable = {
   status: { [Op.in]: ["active", "paused"] },
   [Op.or]: brandOpen,
 };
+
+/**
+ * Stars, averaged, for a set of listings or a set of sellers.
+ *
+ * One grouped query rather than one per row: a page of forty-eight cards each
+ * asking for its own average is forty-eight round trips to answer something
+ * the database can total in a single pass.
+ *
+ * Rounded to one decimal on the way out. A rating of 4.33333 is not more
+ * truthful than 4.3, it is only longer, and nobody chooses between sellers on
+ * the second decimal place.
+ */
+const averages = async (model, key, ids) => {
+  if (!ids.length) return new Map();
+
+  const rows = await model.findAll({
+    where: { [key]: { [Op.in]: ids } },
+    attributes: [key, [fn("AVG", col("stars")), "average"], [fn("COUNT", col("stars")), "count"]],
+    group: [key],
+    raw: true,
+  });
+
+  return new Map(
+    rows.map(row => [
+      row[key],
+      {
+        average: Math.round(Number(row.average) * 10) / 10,
+        count: Number(row.count),
+      },
+    ])
+  );
+};
+
+// Nobody has rated it yet, said as a shape rather than as null, so a caller
+// can read `.count` without checking whether there is anything to read.
+const UNRATED = { average: null, count: 0 };
 
 // A parent category means its children too. Someone browsing "Home" expects
 // the things filed under "Kitchen", and the seller filed them precisely.
@@ -144,6 +180,8 @@ exports.list = catchAsync(async (req, res, next) => {
     byProduct.set(shot.productId, held);
   }
 
+  const rated = await averages(Market.ProductReview, "productId", products.map(p => p.id));
+
   return res.status(200).json(
     products.map(product => {
       const images = byProduct.get(product.id) ?? [];
@@ -154,6 +192,7 @@ exports.list = catchAsync(async (req, res, next) => {
         // Kept alongside the list so nothing that only wanted one photograph
         // has to learn about the other four.
         cover: images[0]?.url ?? null,
+        rating: rated.get(product.id) ?? UNRATED,
       };
     })
   );
@@ -208,5 +247,46 @@ exports.get = catchAsync(async (req, res, next) => {
 
   if (!product) return next(new AppError("Listing not found", 404));
 
-  return res.status(200).json(product);
+  // Two different numbers, and a shopper reads them differently: one says
+  // whether the thing is good, the other whether the person behind it is.
+  const [listing, seller] = await Promise.all([
+    averages(Market.ProductReview, "productId", [product.id]),
+    averages(Market.SellerRating, "sellerId", [product.seller?.id].filter(Boolean)),
+  ]);
+
+  return res.status(200).json({
+    ...product.toJSON(),
+    rating: listing.get(product.id) ?? UNRATED,
+    seller: product.seller && {
+      ...product.seller.toJSON(),
+      rating: seller.get(product.seller.id) ?? UNRATED,
+    },
+  });
+});
+
+/**
+ * What people who bought it thought.
+ *
+ * Public, and named — unlike a question, whose author is hidden. A review
+ * nobody can be held to is a review anybody can invent, and the buyer and
+ * seller have already dealt with each other in any case.
+ */
+exports.reviews = catchAsync(async (req, res, next) => {
+  const product = await Market.Product.findOne({
+    where: { id: req.params.id, ...addressable },
+    attributes: ["id"],
+    include: [SHOP],
+    subQuery: false,
+  });
+
+  if (!product) return next(new AppError("Listing not found", 404));
+
+  const reviews = await Market.ProductReview.findAll({
+    where: { productId: product.id },
+    attributes: ["id", "productId", "stars", "body", "createdAt"],
+    include: [{ model: Accounts.Account, as: "author", attributes: ["username", "avatar"] }],
+    order: [["createdAt", "DESC"]],
+  });
+
+  return res.status(200).json(reviews);
 });

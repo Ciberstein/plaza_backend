@@ -89,6 +89,13 @@ const SHIPPING_MODE = ["seller", "plaza", "pickup"];
 const QUESTION_MAX = 500;
 const ANSWER_MAX = 1000;
 
+// One to five. Not zero: a rating of nothing is indistinguishable from not
+// having rated, and the difference between those two is the whole point of
+// counting them.
+const MIN_STARS = 1;
+const MAX_STARS = 5;
+const COMMENT_MAX = 1000;
+
 const Shop = db.define(
   "shops",
   {
@@ -702,9 +709,141 @@ const ProductQuestion = db.define(
   }
 );
 
+/**
+ * What a buyer thought of the person who sold to them.
+ *
+ * Anchored to the suborder, uniquely. That single column does three jobs: it
+ * proves the transaction happened, it names which one is being rated, and it
+ * is what stops the same purchase being rated twice. A seller with a hundred
+ * completed sales can hold a hundred ratings and not one more.
+ *
+ * There is no way to change one once it is left. That is not an oversight and
+ * it is not laziness: an editable rating is something a seller can lean on a
+ * buyer to revise, and the person a reputation system has to protect first is
+ * the one telling the truth about a bad experience.
+ *
+ * `sellerId` is copied from the suborder rather than read through it. It is
+ * the column every average groups by, it can never change for a given
+ * suborder, and joining a table to reach it on every listing page is a cost
+ * paid for nothing.
+ */
+const SellerRating = db.define(
+  "seller_ratings",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    // One transaction, one rating. Unique, so the rule is the database's and
+    // not something a controller has to remember on every path.
+    subOrderId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      unique: true,
+      field: "subOrderId",
+    },
+    // Who is being rated.
+    sellerId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "sellerId",
+    },
+    // Who left it. Shown, unlike a question's author: a review nobody can be
+    // held to is a review anybody can invent, and the buyer is not anonymous
+    // to this seller anyway — they have already dealt with each other.
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    stars: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      validate: { min: MIN_STARS, max: MAX_STARS },
+      field: "stars",
+    },
+    // Optional. Stars are the rating; words are a courtesy, and demanding them
+    // is how a rating box turns into something people skip entirely.
+    comment: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      validate: { len: [1, COMMENT_MAX] },
+      field: "comment",
+    },
+  },
+  {
+    tableName: "seller_ratings",
+    schema: "market",
+    indexes: [{ fields: ["sellerId"] }],
+  }
+);
+
+/**
+ * What a buyer thought of the thing itself.
+ *
+ * A different judgement from the one above and kept in a different table: a
+ * seller rating is about conduct — did they answer, did they show up, was it
+ * as described — and this is about whether the object is any good. They
+ * aggregate onto different things, so they are counted separately.
+ *
+ * Unique per account and product, not per purchase. Somebody who buys the same
+ * coffee four times has one opinion of it, and letting them file four would
+ * let one voice outweigh four other people's.
+ *
+ * Having bought it is checked when the review is written, against a delivered
+ * order, and is not recorded here: the order is the proof and it already
+ * exists. What this table holds is the opinion.
+ */
+const ProductReview = db.define(
+  "product_reviews",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    stars: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      validate: { min: MIN_STARS, max: MAX_STARS },
+      field: "stars",
+    },
+    body: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      validate: { len: [1, COMMENT_MAX] },
+      field: "body",
+    },
+  },
+  {
+    tableName: "product_reviews",
+    schema: "market",
+    indexes: [
+      { unique: true, fields: ["accountId", "productId"] },
+      { fields: ["productId"] },
+    ],
+  }
+);
+
 const Market = {
   Shop, Product, ProductImage, Favourite, CartItem, Order, SubOrder, OrderItem,
-  ProductQuestion,
+  ProductQuestion, SellerRating, ProductReview,
+  MIN_STARS, MAX_STARS, COMMENT_MAX,
   MAX_PRODUCT_IMAGES, QUESTION_MAX, ANSWER_MAX,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
   PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,

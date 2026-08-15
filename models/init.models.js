@@ -216,6 +216,64 @@ const init = () => {
     as: "asker",
   });
 
+  /* REPUTATION */
+
+  // One rating per completed transaction. CASCADE from the suborder, because a
+  // rating of a purchase that no longer exists is a rating of nothing.
+  Market.SubOrder.hasOne(Market.SellerRating, {
+    foreignKey: "subOrderId",
+    as: "rating",
+    onDelete: "CASCADE",
+  });
+  Market.SellerRating.belongsTo(Market.SubOrder, {
+    foreignKey: "subOrderId",
+    as: "suborder",
+  });
+
+  // The seller being rated, and the buyer who rated. Two associations onto the
+  // same table, so both ends are named for the part they play.
+  Accounts.Account.hasMany(Market.SellerRating, {
+    foreignKey: "sellerId",
+    as: "ratings",
+    onDelete: "CASCADE",
+  });
+  Market.SellerRating.belongsTo(Accounts.Account, {
+    foreignKey: "sellerId",
+    as: "seller",
+  });
+
+  Accounts.Account.hasMany(Market.SellerRating, {
+    foreignKey: "accountId",
+    as: "ratingsGiven",
+    onDelete: "CASCADE",
+  });
+  Market.SellerRating.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "rater",
+  });
+
+  // A review dies with the listing it is about: kept, it would be an opinion
+  // of something nobody can look at.
+  Market.Product.hasMany(Market.ProductReview, {
+    foreignKey: "productId",
+    as: "reviews",
+    onDelete: "CASCADE",
+  });
+  Market.ProductReview.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
+  Accounts.Account.hasMany(Market.ProductReview, {
+    foreignKey: "accountId",
+    as: "reviews",
+    onDelete: "CASCADE",
+  });
+  Market.ProductReview.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "author",
+  });
+
 };
 
 module.exports = init;
