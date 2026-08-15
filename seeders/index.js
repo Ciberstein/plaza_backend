@@ -75,6 +75,19 @@ const cities_seeder = async () => {
   });
 };
 
+// Every aisle ends in one of these.
+//
+// A taxonomy is a guess about what people will sell, and it is always wrong at
+// the edges. Without a way out, whoever has the thing nobody anticipated files
+// it under whatever looks nearest — and it becomes unfindable for everyone,
+// including the shopper who would have bought it.
+//
+// Per parent rather than one at the top: a single global "Otros" is a drawer
+// nobody opens, while "Tecnología → Otros" still turns up for anyone browsing
+// technology. Appended here rather than written into the data files so that a
+// category added later cannot be left without one.
+const CATCH_ALL = "Otros";
+
 /**
  * One tree, of either kind.
  *
@@ -100,15 +113,20 @@ const category_tree = async ({ tree, kind, labels }) => {
   const stored = await Category.findAll({ attributes: ["id", "slug"] });
   const idOf = new Map(stored.map(c => [c.slug, c.id]));
 
-  const children = tree.flatMap(parent =>
-    (parent.children ?? []).map((name, index) => ({
+  const children = tree.flatMap((parent) => {
+    // Last, always: the position it is given is the one after everything the
+    // aisle actually names, so it sits at the bottom of the list instead of
+    // competing with the categories that say something.
+    const names = [...(parent.children ?? []), CATCH_ALL];
+
+    return names.map((name, index) => ({
       name,
       slug: `${parent.slug}-${slugify(name)}`,
       position: index + 1,
       kind,
       parentId: idOf.get(parent.slug) ?? null,
-    }))
-  ).filter(child => child.parentId !== null);
+    }));
+  }).filter(child => child.parentId !== null);
 
   return seedMissing({
     label: labels.children,

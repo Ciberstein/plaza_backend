@@ -278,6 +278,14 @@ refuses a listing filed against the other one — a caregiver under Televisores
 is a listing no shopper will ever find. Slugs stay unique across both, so a
 category URL needs no aisle in it.
 
+**Every category ends in "Otros".** A taxonomy is a guess about what people
+will sell and it is always wrong at the edges; without a way out, whoever has
+the thing nobody anticipated files it under whatever looks nearest and it goes
+unfound. One per parent rather than one at the top, because a single global
+catch-all is a drawer nobody opens while "Tecnología → Otros" still turns up
+for anyone browsing technology. The seeder appends it rather than the data
+files listing it, so a category added later cannot be left without one.
+
 **A question's answer is a column, not another question.** `product_questions`
 holds the seller's reply in `answer` and `answeredAt` rather than in a second
 row pointing back with a `replyTo`. A self-referencing table would model a
