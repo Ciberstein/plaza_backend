@@ -1,4 +1,4 @@
-const { Op } = require("sequelize");
+const { Op, fn, col } = require("sequelize");
 const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
@@ -45,5 +45,24 @@ exports.get = catchAsync(async (req, res, next) => {
 
   if (!shop) return next(new AppError("Shop not found", 404));
 
-  return res.status(200).json(shop);
+  // What buyers thought of dealing with this shop. Grouped on `shopId`, so it
+  // is the brand's average and not the sum of whoever happened to answer —
+  // which is the whole reason a shop may have more than one person in it.
+  const rated = await Market.SellerRating.findAll({
+    where: { shopId: shop.id },
+    attributes: [
+      [fn("AVG", col("stars")), "average"],
+      [fn("COUNT", col("stars")), "count"],
+    ],
+    raw: true,
+  });
+
+  const count = Number(rated[0]?.count ?? 0);
+
+  return res.status(200).json({
+    ...shop.toJSON(),
+    rating: count
+      ? { average: Math.round(Number(rated[0].average) * 10) / 10, count }
+      : { average: null, count: 0 },
+  });
 });

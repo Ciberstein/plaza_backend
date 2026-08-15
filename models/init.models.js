@@ -274,6 +274,95 @@ const init = () => {
     as: "author",
   });
 
+  // The other half of a property listing. CASCADE and one-to-one: these
+  // columns describe that listing and have no meaning apart from it, so they
+  // cannot outlive it and cannot be pointed at a second one.
+  Market.Product.hasOne(Market.Property, {
+    foreignKey: "productId",
+    as: "property",
+    onDelete: "CASCADE",
+  });
+  Market.Property.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
+  // A visit to a listing that no longer exists is nothing to keep, and the
+  // same is true of one asked for by an account that is gone. Both CASCADE,
+  // the way questions do.
+  Market.Product.hasMany(Market.VisitRequest, {
+    foreignKey: "productId",
+    as: "visits",
+    onDelete: "CASCADE",
+  });
+  Market.VisitRequest.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
+  Accounts.Account.hasMany(Market.VisitRequest, {
+    foreignKey: "accountId",
+    as: "visits",
+    onDelete: "CASCADE",
+  });
+  Market.VisitRequest.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "visitor",
+  });
+
+  // Who works in a shop that is not theirs. CASCADE from both sides: a
+  // membership of a shop that is gone, or held by an account that is gone, is
+  // a row that can never mean anything again.
+  Market.Shop.hasMany(Market.ShopMember, {
+    foreignKey: "shopId",
+    as: "members",
+    onDelete: "CASCADE",
+  });
+  Market.ShopMember.belongsTo(Market.Shop, {
+    foreignKey: "shopId",
+    as: "shop",
+  });
+
+  Accounts.Account.hasMany(Market.ShopMember, {
+    foreignKey: "accountId",
+    as: "memberships",
+    onDelete: "CASCADE",
+  });
+  Market.ShopMember.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "account",
+  });
+
+  // SET NULL rather than CASCADE: an invitation outlives whoever sent it, and
+  // losing the sender is not a reason to throw somebody out of a shop.
+  Market.ShopMember.belongsTo(Accounts.Account, {
+    foreignKey: "invitedBy",
+    as: "inviter",
+    onDelete: "SET NULL",
+  });
+
+  // Who confirmed a suborder, and so who the buyer deals with. SET NULL, for
+  // the same reason: the order is still the shop's if the person who answered
+  // it has since left.
+  Market.SubOrder.belongsTo(Accounts.Account, {
+    foreignKey: "handledBy",
+    as: "handler",
+    onDelete: "SET NULL",
+  });
+
+  // A rating left for a shop rather than for the person who happened to answer
+  // the phone. SET NULL so a closing shop does not delete its sellers' history
+  // — the average simply falls back to the person it was left for.
+  Market.Shop.hasMany(Market.SellerRating, {
+    foreignKey: "shopId",
+    as: "ratings",
+    onDelete: "SET NULL",
+  });
+  Market.SellerRating.belongsTo(Market.Shop, {
+    foreignKey: "shopId",
+    as: "shop",
+  });
+
 };
 
 module.exports = init;

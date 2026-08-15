@@ -281,6 +281,61 @@ const questionAnswered = ({ buyer, title, question, answer }) => ({
   `),
 });
 
+/**
+ * To the owner: somebody wants to see it.
+ *
+ * The visitor's name is here and their phone and email are not. That is the
+ * whole shape of this feature — accepting is what opens the contact details,
+ * and a mail that carried them would have opened them before the owner
+ * decided anything.
+ */
+const visitRequested = ({ owner, title, visitor, message, when }) => ({
+  subject: "Someone asked to see your property",
+  html: layout("A visit request", `
+    ${paragraph(`Hi ${escape(owner)}, ${escape(visitor)} asked to see ${escape(title)}.`)}
+    ${quoted(message, "They wrote")}
+    ${when ? paragraph(`They suggested ${escape(when)}.`) : ""}
+    ${paragraph("Open Visits on Plaza to accept or decline. Accepting is what shares your contact details with them, and theirs with you.")}
+    ${note("Until you accept, neither of you can see the other's phone, email or the full address.")}
+  `),
+});
+
+/** To whoever asked: the owner said yes. */
+const visitAccepted = ({ visitor, title }) => ({
+  subject: "Your visit request was accepted",
+  html: layout("The owner accepted", `
+    ${paragraph(`Hi ${escape(visitor)}, the owner of ${escape(title)} accepted your visit request.`)}
+    ${paragraph("Open Visits on Plaza to see how to reach them and where to go.")}
+    ${note("The details are on Plaza rather than in this message, because an email is forwarded and left in inboxes far longer than either of you would choose.")}
+  `),
+});
+
+/**
+ * To the invited person: a shop asked you to join.
+ *
+ * It names the shop and not the owner's contact details, like every other
+ * notice here. Accepting happens in Plaza rather than by replying, because
+ * accepting is what grants somebody a catalogue and a mailbox reply cannot be
+ * checked against a session.
+ */
+const shopInvited = ({ username, shop }) => ({
+  subject: "You were invited to join a shop",
+  html: layout("An invitation", `
+    ${paragraph(`Hi ${escape(username)}, ${escape(shop)} asked you to work in their shop on Plaza.`)}
+    ${paragraph("Open Invitations on Plaza to accept or decline. Accepting lets you list under their name, answer their buyers and handle their orders.")}
+    ${note("Nothing happens until you accept. If you were not expecting this, decline it and nothing changes.")}
+  `),
+});
+
+/** To the owner: they said yes. */
+const shopInviteAccepted = ({ username, person, shop }) => ({
+  subject: "Your invitation was accepted",
+  html: layout("They joined", `
+    ${paragraph(`Hi ${escape(username)}, ${escape(person)} accepted your invitation to ${escape(shop)}.`)}
+    ${paragraph("They can now list under the shop, answer questions and visits, and handle its orders. Deleting a listing stays with whoever created it, or with you.")}
+  `),
+});
+
 module.exports = {
   orderPlaced,
   orderReceipt,
@@ -290,6 +345,10 @@ module.exports = {
   orderCancelled,
   questionAsked,
   questionAnswered,
+  visitRequested,
+  visitAccepted,
+  shopInvited,
+  shopInviteAccepted,
   verifyEmail,
   changeEmail,
   resetPassword,

@@ -1,6 +1,7 @@
 const AppError = require("../../utils/appError.util");
 const catchAsync = require("../../utils/catchAsync.util");
 const Market = require("../../models/market.models");
+const { mayActForShop, mayActOnListing, mayDeleteListing } = require("../../utils/shopAccess.util");
 const { Category } = require("../../models/categories.models");
 const Geo = require("../../models/geo.models");
 
@@ -144,15 +145,14 @@ exports.validate = catchAsync(async (req, res, next) => {
     if (!city) return next(new AppError("Pick a city from the list", 406));
   }
 
-  // Selling under a shop means selling under a brand, so the brand has to be
-  // one this person actually holds. Its status is not checked here: a draft
-  // listing may point at a shop that is still waiting for review. Whether it
-  // may go live is a question for publish.
+  // Selling under a shop means selling under a brand, so it has to be one this
+  // person may act for — theirs, or one they were invited into and accepted.
+  // Its status is not checked here: a draft listing may point at a shop that is
+  // still waiting for review. Whether it may go live is a question for publish.
   if (shopId !== undefined && shopId !== null) {
-    const shop = await Market.Shop.findOne({
-      where: { id: shopId, accountId: req.sessionAccount.id },
-    });
-    if (!shop) return next(new AppError("That shop is not yours", 403));
+    if (!(await mayActForShop(req.sessionAccount.id, shopId))) {
+      return next(new AppError("That shop is not one you work in", 403));
+    }
   }
 
   req.body.title = title.trim();
@@ -163,15 +163,19 @@ exports.validate = catchAsync(async (req, res, next) => {
 // Ownership is resolved from the session, never from the body. A productId in
 // the request would let anyone edit a listing by guessing a number.
 exports.owned = catchAsync(async (req, res, next) => {
-  const product = await Market.Product.findOne({
-    where: { id: req.params.id, accountId: req.sessionAccount.id },
+  // Fetched by id and authorised afterwards, rather than filtered by
+  // `accountId` in the query. A listing under a shop belongs to the shop, so
+  // the question is no longer one a WHERE clause can answer.
+  const product = await Market.Product.findByPk(req.params.id, {
     include: [{ model: Market.ProductImage, as: "images" }],
     order: [[{ model: Market.ProductImage, as: "images" }, "position", "ASC"]],
   });
 
-  // Not found rather than forbidden: someone else's listing should not be
-  // distinguishable from one that does not exist.
-  if (!product) return next(new AppError("Listing not found", 404));
+  // Not found rather than forbidden, and the same answer for both: someone
+  // else's listing should not be distinguishable from one that does not exist.
+  if (!product || !(await mayActOnListing(req.sessionAccount.id, product))) {
+    return next(new AppError("Listing not found", 404));
+  }
 
   req.product = product;
 
@@ -183,6 +187,29 @@ exports.owned = catchAsync(async (req, res, next) => {
 // They are gathered here rather than inside the publish controller because a
 // seller who fails two of them deserves to be told both, not sent round the
 // loop once per problem.
+/**
+ * The one thing a collaborator may not do to the catalogue.
+ *
+ * Deleting is irreversible and it is the only irreversible action in there, so
+ * it stays with whoever created the listing, or with the shop's owner.
+ * "Anybody may delete anything" is a bad default for a room of people still
+ * learning to work together — and archiving, which is what somebody usually
+ * means, is open to everyone.
+ *
+ * Runs after `owned`, so `req.product` is already loaded and already known to
+ * be one this person may touch at all.
+ */
+exports.deletable = catchAsync(async (req, res, next) => {
+  if (!(await mayDeleteListing(req.sessionAccount.id, req.product))) {
+    return next(new AppError(
+      "Only whoever listed it, or the shop's owner, can delete it. You can archive it instead.",
+      403,
+    ));
+  }
+
+  next();
+});
+
 exports.publishable = catchAsync(async (req, res, next) => {
   const product = req.product;
   const problems = [];
@@ -194,10 +221,13 @@ exports.publishable = catchAsync(async (req, res, next) => {
   }
 
   const isService = product.kind === "service";
+  const isProperty = product.kind === "property";
 
   // A photograph proves the object is real and is what the description says.
   // Work has nothing to photograph before it is done, so a service may go up
-  // without one — a plumber has no picture of your pipe yet.
+  // without one — a plumber has no picture of your pipe yet. A building is
+  // never in that position, and an unphotographed one is the oldest shape a
+  // property scam takes.
   if (!isService && !product.images?.length) {
     problems.push("add at least one photo");
   }
@@ -205,7 +235,21 @@ exports.publishable = catchAsync(async (req, res, next) => {
   if (!product.categoryId) problems.push("pick a category");
   if (!product.cityId) problems.push("say where it is");
 
-  if (isService) {
+  if (isProperty) {
+    // The row is created with the listing, so its absence means something went
+    // wrong rather than that the seller has not filled it in yet. Checked
+    // because publishing is the last moment anyone looks.
+    const property = await Market.Property.findByPk(product.id);
+
+    if (!property) problems.push("finish the property details");
+    else {
+      if (!property.operation) problems.push("say whether it is for sale or for rent");
+      if (!property.builtArea) problems.push("give the built area");
+      if (!property.address) problems.push("give the address");
+    }
+
+    if (product.price === null) problems.push("say what it costs");
+  } else if (isService) {
     // A quoted service carries neither, and that is a complete answer. A
     // priced one has to say what the price buys.
     if (product.price !== null && !product.rateUnit) problems.push("say what the rate covers");
@@ -219,11 +263,10 @@ exports.publishable = catchAsync(async (req, res, next) => {
   // A listing cannot carry a brand that the square cannot see. Left until now
   // so a seller can prepare listings while their shop is still in review.
   if (product.shopId) {
-    const shop = await Market.Shop.findOne({
-      where: { id: product.shopId, accountId: req.sessionAccount.id },
-    });
+    const shop = await Market.Shop.findByPk(product.shopId);
+    const allowed = shop && await mayActForShop(req.sessionAccount.id, shop.id);
 
-    if (!shop) problems.push("pick a shop you own, or none");
+    if (!allowed) problems.push("pick a shop you work in, or none");
     else if (shop.status !== "active") problems.push(`open ${shop.name} first`);
   }
 

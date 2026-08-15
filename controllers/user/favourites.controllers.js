@@ -3,16 +3,47 @@ const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
 
+// What a saved listing carries. Anything can be saved — a shirt, a plumber, a
+// flat — and a card cannot draw itself without knowing which of the three it
+// is, so `kind` and `rateUnit` are on the list and the property row comes
+// along for the ones that have one.
+//
+// Only the columns a card shows. The address is one of them, and it is trimmed
+// here the same way the public grid trims it: a saved listing is no more
+// private than a browsed one, and the shortening has to happen on this side of
+// the wire either way.
+const PROPERTY_CARD = [
+  "productId", "operation", "builtArea", "bedrooms", "bathrooms", "parking",
+  "stratum", "adminFee", "neighborhood", "address", "addressVisibility",
+];
+
 const PRODUCT = {
   model: Market.Product,
   as: "product",
-  attributes: ["id", "title", "price", "currency", "stock", "status", "condition", "shopId"],
+  attributes: [
+    "id", "kind", "title", "price", "rateUnit", "currency", "stock", "status",
+    "condition", "shopId",
+  ],
   include: [
     // The shop's status comes along because a listing is only really on sale
     // when its brand is open too.
     { model: Market.Shop, as: "shop", attributes: ["id", "name", "slug", "status"], required: false },
     { model: Accounts.Account, as: "seller", attributes: ["id", "username"] },
+    { model: Market.Property, as: "property", attributes: PROPERTY_CARD, required: false },
   ],
+};
+
+// The same rule the public endpoint applies, applied again here rather than
+// imported across the public/user boundary: the split is on '#', which is
+// where a Colombian address stops naming the street and starts naming the door.
+const publicAddress = (property) => {
+  if (!property?.address) return null;
+
+  switch (property.addressVisibility) {
+    case "exact": return property.address;
+    case "street": return property.address.split("#")[0].trim() || null;
+    default: return null;
+  }
 };
 
 /**
@@ -78,6 +109,12 @@ exports.list = catchAsync(async (req, res) => {
         product: {
           ...row.product.toJSON(),
           cover: coverOf.get(row.productId) ?? null,
+          ...(row.product.property && {
+            property: {
+              ...row.product.property.toJSON(),
+              address: publicAddress(row.product.property),
+            },
+          }),
         },
       }))
   );

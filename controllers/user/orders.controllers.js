@@ -1,6 +1,7 @@
 const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const { db } = require("../../database/config");
+const { shopIdsFor } = require("../../utils/shopAccess.util");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
 const Geo = require("../../models/geo.models");
@@ -43,11 +44,15 @@ const BUYER_VIEW = [
   {
     model: Market.SubOrder,
     as: "suborders",
-    attributes: ["id", "shopId", "subtotal", "status", "cancelledBy", "cancelReason"],
+    attributes: ["id", "shopId", "subtotal", "status", "cancelledBy", "cancelReason", "handledBy"],
     include: [
       ITEM,
       { model: Market.Shop, as: "shop", attributes: ["id", "name", "slug", "logo"], required: false },
       CONTACT("seller"),
+      // Whoever confirmed it. In a shop with several people that is who the
+      // buyer has actually been dealing with, and `seller` is only whoever
+      // happens to hold the listing.
+      CONTACT("handler"),
     ],
   },
 ];
@@ -80,10 +85,19 @@ const contact = (account, status) => {
 const revealPhones = (order) => {
   const plain = order.toJSON();
 
-  plain.suborders = (plain.suborders ?? []).map(part => ({
-    ...part,
-    seller: contact(part.seller, part.status),
-  }));
+  plain.suborders = (plain.suborders ?? []).map((part) => {
+    // Whoever confirmed it, falling back to whoever holds the listing. The
+    // fallback is not a compromise: for every shopless seller, and for every
+    // suborder written before shops had more than one person, the two are the
+    // same account.
+    const who = part.handler ?? part.seller;
+
+    return {
+      ...part,
+      seller: contact(who, part.status),
+      handler: undefined,
+    };
+  });
 
   return plain;
 };
@@ -506,9 +520,20 @@ const reloadSale = async (id) =>
     await Market.SubOrder.findByPk(id, { attributes: SUBORDER_ATTRS, include: SELLER_VIEW }),
   );
 
+// Everything this person sells: their own, and everything sold under a shop
+// they work in. The same clause the listing and question inboxes use, for the
+// same reason — one shape of the question, answered in one place.
+const mineOrMyShops = async (accountId) => {
+  const shopIds = await shopIdsFor(accountId);
+
+  return shopIds.length
+    ? { [Op.or]: [{ accountId }, { shopId: { [Op.in]: shopIds } }] }
+    : { accountId };
+};
+
 exports.sales = catchAsync(async (req, res) => {
   const sales = await Market.SubOrder.findAll({
-    where: { accountId: req.sessionAccount.id },
+    where: await mineOrMyShops(req.sessionAccount.id),
     attributes: SUBORDER_ATTRS,
     include: SELLER_VIEW,
     order: [["createdAt", "DESC"]],
@@ -522,7 +547,13 @@ exports.confirm = catchAsync(async (req, res, next) => {
     return next(new AppError(`This order is ${req.suborder.status} already`, 409));
   }
 
-  await req.suborder.update({ status: "confirmed" });
+  // `handledBy` is the contact from here on. Before shops had more than one
+  // person, `accountId` answered that; with several it names whoever happens
+  // to hold the listing rather than whoever answered the buyer.
+  await req.suborder.update({
+    status: "confirmed",
+    handledBy: req.sessionAccount.id,
+  });
   await rollUp(req.suborder.orderId);
 
   // The notice says it happened and points at the page. The contact details

@@ -42,7 +42,14 @@ const PRODUCT_CONDITION = ["new", "like_new", "good", "acceptable", "for_parts"]
 // a photograph, an order line and a question all point at a listing, and
 // making that pointer mean two things would make five relationships
 // polymorphic to spare four columns.
-const LISTING_KIND = ["good", "service"];
+// A property joins them for the same reason and is the case that tests it: of
+// this table's fifteen columns it uses ten unchanged, and of the six tables
+// pointing at a listing it wants three — photographs, favourites and
+// questions. Giving it a table of its own would have meant duplicating the
+// upload pipeline and the question thread to spare five null columns.
+//
+// What it does not share lives in `market.properties`, one row to one listing.
+const LISTING_KIND = ["good", "service", "property"];
 
 // What the price of a service buys. `job` is the fixed quote — a bathroom
 // retiled, a portrait shot — where hours are the provider's problem and not
@@ -60,8 +67,59 @@ const SERVICE_OPTION = ["at_client", "at_provider", "remote"];
 // Which set a listing's `delivery` column is checked against. The column holds
 // one answer to one question — how the two of you meet — and what counts as a
 // valid answer depends on whether there is a parcel or a person.
+// A property answers no such question: nothing is handed over and nobody
+// travels to deliver it. The empty set is the only valid answer, which is
+// stricter than leaving the column unchecked.
 const handoverOptions = (kind) =>
-  kind === "service" ? SERVICE_OPTION : DELIVERY_OPTION;
+  kind === "service" ? SERVICE_OPTION : kind === "property" ? [] : DELIVERY_OPTION;
+
+/* ─── property vocabulary ─────────────────────────────────────────────────── */
+
+// The axis. It decides what `price` means — an asking price or a month's rent
+// — which is what lets one range filter compare like with like. A listing is
+// one or the other, never both; an owner offering both publishes twice.
+const PROPERTY_OPERATION = ["sale", "rent"];
+
+// Not the same question as a good's condition. `off_plan` is sobre planos:
+// sold before it exists, which is a large part of what is on sale here and has
+// no equivalent among second-hand objects.
+const PROPERTY_CONDITION = ["new", "used", "off_plan"];
+
+// What the building and the flat come with. A Postgres array for the same
+// reason `delivery` is one: a fixed, short set that is never queried on its
+// own.
+const PROPERTY_FEATURE = [
+  "elevator", "concierge", "gated_community", "visitor_parking",
+  "pool", "gym", "communal_room", "bbq_area", "playground", "sports_court",
+  "balcony", "terrace", "patio", "garden", "storage_room",
+  "fitted_kitchen", "closets", "fireplace", "air_conditioning", "natural_gas",
+  "furnished", "pets_allowed",
+];
+
+// How much of the address the listing shows. The column always holds the whole
+// thing — a map cannot be drawn from half an address, and an accepted visitor
+// has to be told where to go — so this governs display and never storage.
+//
+//   exact   as written
+//   street  up to the '#': "Calle 45 # 12-34" reads "Calle 45"
+//   hidden  neighbourhood and city only
+//
+// Three levels rather than a private/public switch because that is what the
+// owner of an empty house actually needs: enough for a buyer to place the
+// block, not enough to find the door.
+const ADDRESS_VISIBILITY = ["exact", "street", "hidden"];
+
+// Colombia's socioeconomic strata. Not a rating of the place — it is what
+// determines the utility bills, which is why every local portal asks for it
+// and why a buyer filters on it.
+const MIN_STRATUM = 1;
+const MAX_STRATUM = 6;
+
+// Asking to see a property, and the owner's answer. There is no "cancelled":
+// a request that was never accepted has nothing to call off, and one that was
+// has already put two people in touch.
+const VISIT_STATUS = ["pending", "accepted", "declined"];
+const VISIT_MESSAGE_MAX = 500;
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
 // No money changes hands online yet, so `paid` sits unused and `confirmed` is
 // the event that matters: the seller saying yes. Both sides may cancel, and
@@ -439,6 +497,16 @@ const SubOrder = db.define(
     // Optional, from either side. Nobody is made to justify themselves, but a
     // cancellation with a line of explanation is the difference between a dead
     // end and something the other person can act on.
+    // Which account confirmed it, and so who the buyer deals with from then
+    // on. Before shops had more than one person, `accountId` answered that; it
+    // no longer does, because a shop's suborder belongs to the shop and any
+    // member may confirm it. Null on everything that predates this and on
+    // every shopless seller, where the two are the same person anyway.
+    handledBy: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "handledBy",
+    },
     cancelReason: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -751,6 +819,18 @@ const SellerRating = db.define(
       allowNull: false,
       field: "sellerId",
     },
+    // And under which brand, when there was one. A shop's reputation belongs
+    // to the shop: an agency that loses an agent does not lose its stars, and
+    // a colleague's bad month is not something the person who answered the
+    // phone carries personally.
+    //
+    // Both columns are always written, so a rating is never orphaned by a shop
+    // closing — the average simply falls back to the person it was left for.
+    shopId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "shopId",
+    },
     // Who left it. Shown, unlike a question's author: a review nobody can be
     // held to is a review anybody can invent, and the buyer is not anonymous
     // to this seller anyway — they have already dealt with each other.
@@ -777,6 +857,9 @@ const SellerRating = db.define(
   {
     tableName: "seller_ratings",
     schema: "market",
+    // Only the one sync can build. `shopId` was added to a table that already
+    // existed, and sync creates indexes before the migrations add columns — so
+    // its index lives in database/migrations.js, which runs in the right order.
     indexes: [{ fields: ["sellerId"] }],
   }
 );
@@ -840,15 +923,379 @@ const ProductReview = db.define(
   }
 );
 
+/**
+ * What a listing is, when the listing is a property.
+ *
+ * One row to one listing, keyed on the listing itself rather than on an id of
+ * its own. That is not a saving of one column: it is the constraint. A
+ * property cannot exist without the listing it describes, cannot be attached
+ * to two, and goes when it goes — none of which a separate key would say.
+ *
+ * The listing keeps everything a property shares with a shirt: who is selling,
+ * under which shop, in which city, the title, the photographs, the price and
+ * the status. What lives here is only what a shirt has no answer to.
+ */
+const Property = db.define(
+  "properties",
+  {
+    productId: {
+      primaryKey: true,
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    operation: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      validate: { isIn: [PROPERTY_OPERATION] },
+      field: "operation",
+    },
+    condition: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      validate: { isIn: [PROPERTY_CONDITION] },
+      field: "condition",
+    },
+    // Square metres are DECIMAL for the same reason money is: a flat measured
+    // at 62.5 m² is not 62, and rounding somebody's home is not cosmetic.
+    //
+    // Built area is the one measurement every property has, so it is the one
+    // that is required. Private area is what the buyer actually lives in and
+    // is the classic complaint when the two differ; lot area only means
+    // something for a house, a finca or bare land.
+    builtArea: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      validate: { min: 1 },
+      field: "builtArea",
+    },
+    privateArea: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      validate: { min: 1 },
+      field: "privateArea",
+    },
+    lotArea: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      validate: { min: 1 },
+      field: "lotArea",
+    },
+    // Zero is a real answer for all four: a studio has no separate bedroom, a
+    // lot has no bathroom, and most flats have neither a half bath nor a
+    // parking space. Required with a default rather than nullable, because
+    // "none" and "not said" are worth telling apart and the form always asks.
+    bedrooms: {
+      type: DataTypes.SMALLINT,
+      allowNull: false,
+      defaultValue: 0,
+      validate: { min: 0, max: 50 },
+      field: "bedrooms",
+    },
+    bathrooms: {
+      type: DataTypes.SMALLINT,
+      allowNull: false,
+      defaultValue: 0,
+      validate: { min: 0, max: 50 },
+      field: "bathrooms",
+    },
+    halfBaths: {
+      type: DataTypes.SMALLINT,
+      allowNull: false,
+      defaultValue: 0,
+      validate: { min: 0, max: 50 },
+      field: "halfBaths",
+    },
+    parking: {
+      type: DataTypes.SMALLINT,
+      allowNull: false,
+      defaultValue: 0,
+      validate: { min: 0, max: 50 },
+      field: "parking",
+    },
+    // Nullable because a lot outside a municipal boundary has none, and
+    // guessing one would be inventing a utility bill.
+    stratum: {
+      type: DataTypes.SMALLINT,
+      allowNull: true,
+      validate: { min: MIN_STRATUM, max: MAX_STRATUM },
+      field: "stratum",
+    },
+    // Which floor it is on. Zero is the ground floor and negative is a
+    // basement, both of which exist and neither of which is "unknown".
+    floor: {
+      type: DataTypes.SMALLINT,
+      allowNull: true,
+      validate: { min: -5, max: 200 },
+      field: "floor",
+    },
+    builtYear: {
+      type: DataTypes.SMALLINT,
+      allowNull: true,
+      validate: { min: 1500, max: 2100 },
+      field: "builtYear",
+    },
+    // The monthly administración. Separate from the price because it is paid
+    // separately, forever, by whoever lives there — a buyer comparing two
+    // flats at the same price is comparing the wrong number without it.
+    adminFee: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: true,
+      validate: { min: 0 },
+      field: "adminFee",
+    },
+    // Whether the rent already covers it. Meaningless on a sale, and the
+    // model-level validation below says so rather than letting it sit there
+    // quietly true.
+    adminIncluded: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: "adminIncluded",
+    },
+    features: {
+      type: DataTypes.ARRAY(DataTypes.STRING),
+      allowNull: false,
+      defaultValue: [],
+      validate: {
+        known(value) {
+          if (!Array.isArray(value)) throw new Error("Features must be a list");
+          const bad = value.filter(v => !PROPERTY_FEATURE.includes(v));
+          if (bad.length) throw new Error(`Unknown feature: ${bad.join(", ")}`);
+        },
+      },
+      field: "features",
+    },
+    // The barrio. Always public, and in Colombia it is what people search by
+    // before they search by anything else.
+    neighborhood: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "neighborhood",
+    },
+    // Always stored whole. `addressVisibility` decides how much of it a
+    // stranger is shown, and an accepted visitor is shown all of it whatever
+    // the setting says — otherwise accepting them would tell them nothing.
+    address: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      validate: { len: [4, 255] },
+      field: "address",
+    },
+    addressVisibility: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "exact",
+      validate: { isIn: [ADDRESS_VISIBILITY] },
+      field: "addressVisibility",
+    },
+    // Off by default, because a number that goes public cannot be called back.
+    // On, it shows on the listing as well; it never shows less than it would
+    // have shown without it.
+    phonePublic: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: "phonePublic",
+    },
+    // Empty until there is a map to put them on. Here from the start so that
+    // drawing one later is a feature and not a migration across every row.
+    latitude: {
+      type: DataTypes.DECIMAL(9, 6),
+      allowNull: true,
+      validate: { min: -90, max: 90 },
+      field: "latitude",
+    },
+    longitude: {
+      type: DataTypes.DECIMAL(9, 6),
+      allowNull: true,
+      validate: { min: -180, max: 180 },
+      field: "longitude",
+    },
+  },
+  {
+    tableName: "properties",
+    schema: "market",
+    validate: {
+      // Two measurements of the same building, so one cannot exceed the other.
+      // Caught here rather than in the form because it is a fact about
+      // buildings and not about this month's interface.
+      privateFitsInside() {
+        if (this.privateArea && Number(this.privateArea) > Number(this.builtArea)) {
+          throw new Error("Private area cannot exceed built area");
+        }
+      },
+      // "Administration included" is an answer to a question only a tenant is
+      // asked. Left set on a sale it would print a line the buyer cannot act
+      // on, so it is refused rather than ignored.
+      adminOnlyWhenRented() {
+        if (this.operation !== "rent" && this.adminIncluded) {
+          throw new Error("Administration is only included in a rent");
+        }
+      },
+    },
+    indexes: [
+      { fields: ["operation", "bedrooms"] },
+      { fields: ["builtArea"] },
+    ],
+  }
+);
+
+/**
+ * Somebody asking to come and see it.
+ *
+ * This is what replaces the order. Everywhere else in Plaza the two sides
+ * reach each other because a suborder was confirmed; a property has no
+ * suborder to confirm, so the request is the event that opens the door. Until
+ * the owner accepts, neither side is given the other's email, phone or full
+ * address — and that filtering happens on the server, never by a browser
+ * choosing not to draw what it was sent.
+ *
+ * Unique per person per listing. That is what stops one account filling an
+ * owner's inbox, and it is the database's rule rather than something the
+ * controller has to remember on every path that can create one.
+ */
+const VisitRequest = db.define(
+  "visit_requests",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    // Who wants to see it. Unlike a question's author, this name is shown —
+    // to the owner alone, who is being asked to let a stranger into a
+    // building and is entitled to know which stranger.
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    message: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+      validate: { len: [1, VISIT_MESSAGE_MAX] },
+      field: "message",
+    },
+    // When they would like to come. A wish, not a booking: nothing is reserved
+    // and the owner is free to answer with another day.
+    preferredAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "preferredAt",
+    },
+    status: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "pending",
+      validate: { isIn: [VISIT_STATUS] },
+      field: "status",
+    },
+    respondedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "respondedAt",
+    },
+  },
+  {
+    tableName: "visit_requests",
+    schema: "market",
+    indexes: [
+      { unique: true, fields: ["accountId", "productId"] },
+      { fields: ["productId", "createdAt"] },
+    ],
+  }
+);
+
+/**
+ * Somebody who works in a shop that is not theirs.
+ *
+ * The owner is not here. They are `Shop.accountId`, which is where they have
+ * always been, and keeping them there means every shop that already exists
+ * needs no backfill and nobody can be removed from their own shop by the
+ * endpoint that removes everybody else. Two roles, encoded structurally: owner
+ * is a column on the shop, collaborator is a row in this table. An enum with
+ * two values would only be a second place for them to disagree.
+ *
+ * `acceptedAt` is the whole invitation. Null means asked and not yet answered,
+ * and a pending row grants nothing at all — joining a shop makes you its public
+ * representative, and an owner who could add somebody without their agreement
+ * could put a stranger's name behind their brand.
+ */
+const ShopMember = db.define(
+  "shop_members",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    shopId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "shopId",
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    // Who sent it. Nullable and SET NULL: an invitation outlives the account
+    // that sent it, and losing the sender is not a reason to lose the
+    // membership.
+    invitedBy: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "invitedBy",
+    },
+    invitedAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW,
+      field: "invitedAt",
+    },
+    acceptedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "acceptedAt",
+    },
+  },
+  {
+    tableName: "shop_members",
+    schema: "market",
+    indexes: [
+      // One membership per person per shop, which is also what stops the same
+      // invitation being sent twice.
+      { unique: true, fields: ["shopId", "accountId"] },
+      // "my shops" and "my invitations" are the same read with the null
+      // checked the other way round.
+      { fields: ["accountId", "acceptedAt"] },
+    ],
+  }
+);
+
 const Market = {
   Shop, Product, ProductImage, Favourite, CartItem, Order, SubOrder, OrderItem,
-  ProductQuestion, SellerRating, ProductReview,
+  ProductQuestion, SellerRating, ProductReview, Property, VisitRequest,
+  ShopMember,
   MIN_STARS, MAX_STARS, COMMENT_MAX,
   MAX_PRODUCT_IMAGES, QUESTION_MAX, ANSWER_MAX,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
   PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,
   SHIPPING_MODE,
   LISTING_KIND, RATE_UNIT, SERVICE_OPTION, handoverOptions,
+  PROPERTY_OPERATION, PROPERTY_CONDITION, PROPERTY_FEATURE,
+  ADDRESS_VISIBILITY, MIN_STRATUM, MAX_STRATUM,
+  VISIT_STATUS, VISIT_MESSAGE_MAX,
 };
 
 module.exports = Market;

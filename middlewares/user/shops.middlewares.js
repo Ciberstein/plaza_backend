@@ -1,6 +1,7 @@
 const AppError = require("../../utils/appError.util");
 const catchAsync = require("../../utils/catchAsync.util");
 const Market = require("../../models/market.models");
+const { mayActForShop } = require("../../utils/shopAccess.util");
 const { uniqueSlug } = require("../../utils/slug.util");
 const Geo = require("../../models/geo.models");
 
@@ -28,6 +29,10 @@ exports.validate = catchAsync(async (req, res, next) => {
 
 // Ownership is resolved from the session, never from the body. A shopId in the
 // request would let anyone edit a shop by guessing a number.
+//
+// Owning is not the same as working in it, and this is the strict one: editing
+// the shop's identity, closing it, inviting and removing people are the four
+// things that stay the owner's. `member` below is the wider door.
 exports.owned = catchAsync(async (req, res, next) => {
   const shop = await Market.Shop.findOne({
     where: { id: req.params.id, accountId: req.sessionAccount.id },
@@ -38,6 +43,26 @@ exports.owned = catchAsync(async (req, res, next) => {
   if (!shop) return next(new AppError("Shop not found", 404));
 
   req.shop = shop;
+
+  next();
+});
+
+/**
+ * The wider door: the owner, or somebody who accepted an invitation.
+ *
+ * Everything about the catalogue goes through here. Reading the roster does
+ * too — a collaborator is entitled to know who else works in the shop whose
+ * name is on their listings.
+ */
+exports.member = catchAsync(async (req, res, next) => {
+  const shop = await Market.Shop.findByPk(req.params.id);
+
+  if (!shop || !(await mayActForShop(req.sessionAccount.id, shop.id))) {
+    return next(new AppError("Shop not found", 404));
+  }
+
+  req.shop = shop;
+  req.isOwner = shop.accountId === req.sessionAccount.id;
 
   next();
 });

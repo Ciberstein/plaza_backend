@@ -101,6 +101,14 @@ exports.add = catchAsync(async (req, res, next) => {
     return next(new AppError("A service is requested directly, not added to a basket", 409));
   }
 
+  // And a property is not bought by pressing a button at all. Refused here
+  // rather than by not drawing the button: the endpoint is what anybody can
+  // reach, and a listing nothing in the interface offers is exactly the one
+  // somebody will try by hand.
+  if (product.kind === "property") {
+    return next(new AppError("A property is visited and negotiated, not added to a basket", 409));
+  }
+
   if (product.accountId === req.sessionAccount.id) {
     return next(new AppError("You cannot buy your own listing", 409));
   }

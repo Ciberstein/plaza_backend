@@ -26,6 +26,17 @@ const COLUMNS = [
   { table: '"market"."products"', column: 'kind', definition: "VARCHAR(255) NOT NULL DEFAULT 'good'" },
   { table: '"market"."products"', column: 'rateUnit', definition: 'VARCHAR(255)' },
   { table: '"market"."categories"', column: 'kind', definition: "VARCHAR(255) NOT NULL DEFAULT 'good'" },
+  // Shops with more than one person. The membership table is new and sync
+  // creates it; these two are columns on tables that already existed, which
+  // sync never revisits.
+  //
+  // Both nullable and both backfill-free on purpose. A suborder written before
+  // this has no handler, and `accountId` is the honest fallback because until
+  // now the two were always the same person. A rating left before this carries
+  // no shop, and inventing one would be inventing a fact about a sale nobody
+  // can go back and check.
+  { table: '"market"."suborders"', column: 'handledBy', definition: 'INTEGER' },
+  { table: '"market"."seller_ratings"', column: 'shopId', definition: 'INTEGER' },
 ];
 
 // The free-text category and city on a shop, replaced by references into
@@ -68,6 +79,15 @@ const NULLABLE = [
  * way and applies itself the moment the way is clear.
  */
 const INDEXES = [
+  {
+    // A shop's average, grouped on its own column. Here rather than on the
+    // model because sync builds a model's indexes before ensureColumns runs,
+    // and an index on a column that does not exist yet takes the boot down.
+    name: "seller_ratings_shop_idx",
+    sql: 'CREATE INDEX IF NOT EXISTS "seller_ratings_shop_idx" ON "market"."seller_ratings" ("shopId");',
+    why: "the shopId column is not there yet",
+    show: "select column_name from information_schema.columns where table_schema = 'market' and table_name = 'seller_ratings';",
+  },
   {
     name: "accounts_username_lower_idx",
     sql: 'CREATE UNIQUE INDEX IF NOT EXISTS "accounts_username_lower_idx" ON "accounts"."accounts" (LOWER("username"));',

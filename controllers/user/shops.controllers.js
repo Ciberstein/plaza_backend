@@ -1,6 +1,8 @@
 const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
+const { Op } = require("sequelize");
 const Market = require("../../models/market.models");
+const { shopIdsFor } = require("../../utils/shopAccess.util");
 const Accounts = require("../../models/accounts.models");
 const cloudinary = require("../../utils/cloudinary.util");
 const { randomUUID } = require("crypto");
@@ -10,14 +12,30 @@ const SHOP_ATTRS = [
   "cityId", "shipping", "status", "submittedAt", "approvedAt", "reviewNote", "createdAt",
 ];
 
+/**
+ * The shops this person may trade under: their own, and the ones they were
+ * invited into and accepted.
+ *
+ * `mine` is on every row so the interface can tell them apart without asking
+ * again — a collaborator sees the shop in their listing form and does not see
+ * the buttons that close it.
+ */
 exports.list = catchAsync(async (req, res) => {
+  const ids = await shopIdsFor(req.sessionAccount.id);
+
   const shops = await Market.Shop.findAll({
-    where: { accountId: req.sessionAccount.id },
-    attributes: SHOP_ATTRS,
+    where: { id: { [Op.in]: ids } },
+    attributes: SHOP_ATTRS.concat("accountId"),
     order: [["createdAt", "DESC"]],
   });
 
-  return res.status(200).json(shops);
+  return res.status(200).json(
+    shops.map((shop) => {
+      const row = shop.toJSON();
+      delete row.accountId;
+      return { ...row, mine: shop.accountId === req.sessionAccount.id };
+    })
+  );
 });
 
 exports.get = catchAsync(async (req, res) => {

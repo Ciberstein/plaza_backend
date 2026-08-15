@@ -60,7 +60,7 @@ exports.rateSeller = catchAsync(async (req, res, next) => {
   }
 
   const suborder = await Market.SubOrder.findByPk(req.body.subOrderId, {
-    attributes: ["id", "orderId", "accountId", "status"],
+    attributes: ["id", "orderId", "accountId", "shopId", "status"],
     include: [
       {
         model: Market.Order,
@@ -99,9 +99,14 @@ exports.rateSeller = catchAsync(async (req, res, next) => {
     return next(new AppError("You already rated this order", 409));
   }
 
+  // Both columns, always. `sellerId` is who was rated; `shopId` is the brand
+  // they were trading under, when there was one, and it is what the shop's
+  // average groups by. Writing both means a rating survives a shop closing —
+  // the average falls back to the person it was left for rather than vanishing.
   const rating = await Market.SellerRating.create({
     subOrderId: suborder.id,
     sellerId: suborder.accountId,
+    shopId: suborder.shopId ?? null,
     accountId: req.sessionAccount.id,
     stars,
     comment: wordsFrom(req.body.comment),

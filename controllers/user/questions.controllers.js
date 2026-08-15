@@ -1,6 +1,8 @@
 const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
+const { Op } = require("sequelize");
 const Market = require("../../models/market.models");
+const { shopIdsFor, mayActOnListing } = require("../../utils/shopAccess.util");
 const Accounts = require("../../models/accounts.models");
 const { mail } = require("../../mail");
 const templates = require("../../mail/templates");
@@ -24,6 +26,18 @@ const PUBLIC_FIELDS = ["id", "productId", "body", "answer", "answeredAt", "creat
 // of it — and the count is of unanswered ones, so a seller who replies always
 // clears the way for the next.
 const MAX_PENDING_PER_LISTING = 3;
+
+// Everything this person may act on: what they listed themselves, and
+// everything listed under a shop they work in. One clause, because every inbox
+// in this project asks the same question and answering it differently in each
+// is how one of them ends up showing a colleague's work and another does not.
+const mineOrMyShops = async (accountId) => {
+  const shopIds = await shopIdsFor(accountId);
+
+  return shopIds.length
+    ? { [Op.or]: [{ accountId }, { shopId: { [Op.in]: shopIds } }] }
+    : { accountId };
+};
 
 /**
  * Sends without being waited for.
@@ -145,9 +159,10 @@ exports.answer = catchAsync(async (req, res, next) => {
 
   if (!question) return next(new AppError("Question not found", 404));
 
-  // The listing's owner, not the shop's: a listing belongs to the person who
-  // put it up, and that is the same column every other rule here reads.
-  if (question.product?.accountId !== req.sessionAccount.id) {
+  // Whoever may act on the listing: the person who put it up, or anybody who
+  // works in the shop it is listed under. A question about a flat should not
+  // wait a week because the colleague who typed it in is on holiday.
+  if (!(await mayActOnListing(req.sessionAccount.id, question.product))) {
     return next(new AppError("Only the seller can answer this question", 403));
   }
 
@@ -184,8 +199,8 @@ exports.inbox = catchAsync(async (req, res) => {
       {
         model: Market.Product,
         as: "product",
-        attributes: ["id", "title", "status"],
-        where: { accountId: req.sessionAccount.id },
+        attributes: ["id", "title", "status", "shopId"],
+        where: await mineOrMyShops(req.sessionAccount.id),
         required: true,
       },
     ],

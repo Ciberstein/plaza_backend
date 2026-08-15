@@ -72,6 +72,14 @@ exports.index = catchAsync(async (_req, res) => {
       subtitle: c.region,
       slug: c.slug,
     })),
+    // The departments, derived from the cities already being sent rather than
+    // queried again or stored twice. Somebody looking for a place to live
+    // searches a department before they search a town — and unlike a category
+    // or a city, this is not a row anywhere: it is a column on the cities, so
+    // deriving it is what keeps it from drifting away from them.
+    regions: [...new Set(cities.map(c => c.region).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map(region => ({ value: region, label: region })),
     shipping: Market.SHIPPING_MODE.map(value => ({ value })),
     conditions: Market.PRODUCT_CONDITION.map(value => ({ value })),
     delivery: Market.DELIVERY_OPTION.map(value => ({ value })),
@@ -81,5 +89,17 @@ exports.index = catchAsync(async (_req, res) => {
     // somebody's time rather than a parcel.
     rateUnits: Market.RATE_UNIT.map(value => ({ value })),
     serviceDelivery: Market.SERVICE_OPTION.map(value => ({ value })),
+    // And the property half. Values only, like everything else here: these are
+    // the facts the form validates against, and the words for them are
+    // interface copy that lives in the frontend's catalogue in three
+    // languages.
+    operations: Market.PROPERTY_OPERATION.map(value => ({ value })),
+    propertyConditions: Market.PROPERTY_CONDITION.map(value => ({ value })),
+    features: Market.PROPERTY_FEATURE.map(value => ({ value })),
+    addressVisibility: Market.ADDRESS_VISIBILITY.map(value => ({ value })),
+    strata: Array.from(
+      { length: Market.MAX_STRATUM - Market.MIN_STRATUM + 1 },
+      (_, i) => ({ value: Market.MIN_STRATUM + i }),
+    ),
   });
 });

@@ -130,10 +130,18 @@ a listing, allowing both is an impersonation waiting to happen.
 ### `/public` — no session
 
 ```
-GET    /public/meta              categories, countries, cities, shipping,
-                                 conditions, delivery options
+GET    /public/meta              categories, countries, cities, regions,
+                                 shipping, conditions, delivery options,
+                                 rate units, and the property vocabulary
 GET    /public/products          kind, q, category, cityId, shopId, limit, offset
-                                 kind is good (default) or service
+                                 kind is good (default), service or property
+                                 category and cityId take several, comma
+                                 separated; a parent category brings its
+                                 children with it
+                                 kind=property also takes: operation, region,
+                                 propertyCondition, minPrice, maxPrice,
+                                 minArea, maxArea, bedrooms, bathrooms,
+                                 parking (minimums), stratum, features
 GET    /public/products/:id
 GET    /public/products/:id/questions
 GET    /public/products/:id/reviews
@@ -154,6 +162,18 @@ business at all.
 ### `/user` — behind the session
 
 ```
+GET    /user/shops/:id/members   the roster; any member may read it
+POST   /user/shops/:id/members   invite by username or email — owner only
+DELETE /user/shops/:id/members/:accountId   remove somebody, or leave
+GET    /user/invitations         shops asking after me
+POST   /user/invitations/:id/accept   and /decline
+
+GET    /user/visits              what I asked to see
+GET    /user/visits/received     what I have been asked to show
+POST   /user/visits              ask to see a property — mail limited
+POST   /user/visits/:id/accept   opens both sides' contact details
+POST   /user/visits/:id/decline
+
 GET    /user/account             PATCH to change name and phone
 POST   /user/account/email       and /email/confirm
 PATCH  /user/account/password
@@ -364,6 +384,95 @@ attached to someone who asked to remove it.
 
 ---
 
+### Properties are a listing plus a second table
+
+`market.properties` holds one row per property listing, keyed on `productId`
+as both primary and foreign key. The listing keeps everything a property shares
+with a shirt — seller, shop, city, title, photographs, price, status — and only
+what a shirt has no answer to lives in the second table.
+
+The alternative was a table of its own, and it was measured rather than argued.
+Of `Product`'s fifteen columns a property uses ten unchanged, and of the six
+tables that point at a listing it wants three: photographs, favourites and
+questions. A separate table would have meant duplicating the whole upload
+pipeline and the question thread to spare five null columns.
+
+What it does **not** want is the other three. The basket and the order endpoints
+refuse `kind === "property"` outright — and the refusal in
+`middlewares/user/orders.middlewares.js` is the one that matters, because that
+middleware builds its list from the **request body** rather than from the basket
+table. Blocking it only in the basket would have left the order endpoint
+reachable by anyone willing to send a product id by hand.
+
+Reviews and seller ratings need a delivered suborder, so they are already
+impossible here and need no guard.
+
+### Visits are what a property has instead of an order
+
+There is no suborder to confirm, so the rule that governs contact details
+everywhere else in Plaza has nothing to hang on. `market.visit_requests`
+replaces it: somebody asks, the owner accepts or declines, and **only on
+acceptance** does either side get the other's email, phone and the full address.
+Pending and declined requests answer with nulls, decided in
+`controllers/user/visits.controllers.js` from the row itself rather than by a
+caller who might get it wrong.
+
+One request per person per listing, enforced by a unique index rather than by a
+controller remembering. A declined request cannot be reopened by asking again:
+an owner who said no has said no.
+
+### The address has three levels, and the phone has two
+
+Copied from idealista, which was checked rather than assumed: it *requires* the
+exact address — a map cannot be drawn without one — and lets the advertiser
+choose how much of it shows. `addressVisibility` is `exact`, `street` or
+`hidden`; the column always holds the whole thing, and `publicAddress()` trims
+it on the way out. The split is on `#`, which is where a Colombian address stops
+naming the street and starts naming the door.
+
+What is deliberately **not** copied is idealista charging €9.90 a month to hide
+it and ranking the listing lower for it. That incentive belongs to idealista's
+business, not to a seller's safety.
+
+`phonePublic` is off by default and governs the phone alone. Email is never
+published. The phone is fetched in a **second query** in the public detail
+endpoint rather than added to the shared `SELLER` include, because a phone
+column on that include would travel with every product page whether or not
+anybody meant to publish it, and one `toJSON()` spread would put it in the
+response.
+
+### A shop can hold more than one person
+
+`Shop.accountId` is the owner and always was. A collaborator is a row in
+`market.shop_members` with `acceptedAt` set. That is the whole role system,
+encoded structurally — an enum with two values would only be a second place for
+them to disagree.
+
+**The shop is the seller.** `Product.accountId` stopped meaning "the seller" and
+now means "who created it", which needed no migration because for every row that
+existed the two were the same person. A listing under a shop belongs to the
+shop: any member may edit it, answer its questions, accept its visits and handle
+its orders. An agency that loses an agent does not lose the flats or the stars.
+
+Every check goes through `utils/shopAccess.util.js`. Nine call sites read it,
+which is the point — nine copies of an authorisation rule is nine chances to
+update eight of them.
+
+**Two refusals are load-bearing.** A pending invitation grants nothing at all:
+joining a shop makes you its public representative, so it cannot be something
+done *to* you. And deleting a listing stays with whoever created it or with the
+owner — it is the only irreversible action in the catalogue, and archiving,
+which is usually what somebody means, is open to everyone.
+
+`SubOrder.handledBy` records who confirmed, and that is who the buyer's contact
+details point at from then on. It falls back to `accountId`, which is not a
+compromise: for every shopless seller and every suborder written before this,
+the two are the same account.
+
+`SellerRating.shopId` is written alongside `sellerId`, always. A shop's average
+groups on one and a person's on the other, so a rating survives a shop closing
+rather than vanishing with it.
+
 ## Known gaps
 
 - **Payments.** `Order.status` and `paidAt` exist and are unused; the webhook
@@ -372,6 +481,17 @@ attached to someone who asked to remove it.
 - **Phone numbers are not verified.** Anyone can enter ten invented digits and
   they are revealed as theirs. The email verification flow is the pattern to
   copy when this matters.
-- **Shops have one owner.** `suborders.accountId` and `products.accountId` mean
-  a seller, and there is no membership table, so a shop cannot be run by several
-  people yet.
+- **Ownership cannot be transferred.** A shop's owner is its owner. Handing that
+  over is its own flow with its own confirmations, and it is not built.
+- **No map.** `properties.latitude` and `longitude` exist and are empty. They
+  are in the schema from the start so that drawing a map later is a feature and
+  not a migration across every row. Whatever draws it has to respect
+  `addressVisibility`: a pin on the exact address publishes the address
+  regardless of what the owner chose.
+- **Almost no tests.** Two exceptions: `scripts/smoke-members.js`, 23 checks,
+  most of them asserting what a collaborator *cannot* do — the half nobody
+  notices is broken. And `scripts/smoke-properties.js` — 41
+  checks against a real database, covering the two new tables, the address
+  rules, the validators, the grid filters and the cascade. It creates what it
+  needs and removes it. `scripts/seed-properties-demo.js` is separate and is
+  demonstration data, not reference data.

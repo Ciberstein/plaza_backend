@@ -11,6 +11,8 @@ const routes = {
   sales: require("./sales.routes"),
   questions: require("./questions.routes"),
   ratings: require("./ratings.routes"),
+  visits: require("./visits.routes"),
+  invitations: require("./invitations.routes"),
 };
 
 // MIDDLEWARES

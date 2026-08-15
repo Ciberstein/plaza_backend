@@ -2,6 +2,7 @@ const { Op } = require("sequelize");
 const AppError = require("../../utils/appError.util");
 const catchAsync = require("../../utils/catchAsync.util");
 const Market = require("../../models/market.models");
+const { shopIdsFor } = require("../../utils/shopAccess.util");
 
 const MAX_LINES = 20;
 
@@ -62,13 +63,26 @@ exports.basket = catchAsync(async (req, res, next) => {
     return next(new AppError("Something in your basket is no longer for sale", 409));
   }
 
-  // Only a thing can run short. A service has no shelf, so how many hours were
-  // asked for is a question for the provider and not for the stock column.
-  const short = products.filter(p => p.kind !== "service" && p.stock < wanted.get(p.id));
+  // Only a thing can run short. Neither a service nor a property has a shelf,
+  // so how many were asked for is a question for the provider and not for the
+  // stock column — and asking a property for two would otherwise be refused
+  // here, with a message about stock, instead of below with the reason.
+  const short = products.filter(p => p.kind === "good" && p.stock < wanted.get(p.id));
 
   if (short.length) {
     const names = short.map(p => `${p.title} (${p.stock} left)`).join(", ");
     return next(new AppError(`Not enough left: ${names}`, 409));
+  }
+
+  // A property is never ordered. The basket refuses one on the way in, but
+  // this list comes from the request body rather than from the basket table,
+  // so refusing it there alone would leave the order endpoint reachable by
+  // anyone willing to send a product id by hand — which is the whole point of
+  // checking here instead of trusting the client's basket.
+  const properties = products.filter(p => p.kind === "property");
+
+  if (properties.length) {
+    return next(new AppError("A property is visited and negotiated, not ordered", 409));
   }
 
   // A request for somebody's time is made to that person, on its own. Letting
@@ -113,10 +127,27 @@ exports.purchased = catchAsync(async (req, res, next) => {
   next();
 });
 
-/** A suborder this person is the seller of. */
+/**
+ * A suborder this person is the seller of.
+ *
+ * "The seller" is no longer one account. A suborder placed against a shop
+ * belongs to the shop, and any member may confirm it, hand it over or call it
+ * off — which is the point of having members at all: nobody should wait a week
+ * because the colleague who listed the thing is away.
+ */
 exports.sold = catchAsync(async (req, res, next) => {
+  const shopIds = await shopIdsFor(req.sessionAccount.id);
+
   const suborder = await Market.SubOrder.findOne({
-    where: { id: req.params.id, accountId: req.sessionAccount.id },
+    where: {
+      id: req.params.id,
+      ...(shopIds.length
+        ? { [Op.or]: [
+            { accountId: req.sessionAccount.id },
+            { shopId: { [Op.in]: shopIds } },
+          ] }
+        : { accountId: req.sessionAccount.id }),
+    },
   });
 
   if (!suborder) return next(new AppError("Order not found", 404));

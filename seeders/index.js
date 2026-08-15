@@ -4,6 +4,7 @@ const { slugify } = require("../utils/slug.util");
 const { countries, cities } = require("./data/geo.data.seeders");
 const { categories } = require("./data/categories.data.seeders");
 const { services } = require("./data/services.data.seeders");
+const { properties } = require("./data/properties.data.seeders");
 
 // Every seeder here inserts only the rows that are missing, matched on a
 // natural key, and never touches a row that already exists. Two consequences
@@ -150,6 +151,12 @@ const seed = async () => {
     tree: services,
     kind: "service",
     labels: { parents: "SERVICE CATEGORIES", children: "SERVICE SUBCATEGORIES" },
+  });
+
+  await category_tree({
+    tree: properties,
+    kind: "property",
+    labels: { parents: "PROPERTY CATEGORIES", children: "PROPERTY SUBCATEGORIES" },
   });
 };
 

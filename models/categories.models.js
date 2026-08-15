@@ -1,5 +1,11 @@
 const { DataTypes } = require("sequelize");
 const { db } = require("../database/config");
+// The one list of what a listing can be, borrowed rather than copied. It was
+// copied here once and drifted: properties were added to the listing kinds and
+// this validator went on refusing them, which is a failure that only shows up
+// at seed time. Neither file requires the other, so there is no cycle to pay
+// for the import.
+const { LISTING_KIND } = require("./market.models");
 
 // Categories are rows, not a constant in the code. They are the one taxonomy
 // both the shopper and the seller navigate by, they grow constantly, and a
@@ -31,7 +37,7 @@ const Category = db.define(
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: "good",
-      validate: { isIn: [["good", "service"]] },
+      validate: { isIn: [LISTING_KIND] },
       field: "kind",
     },
     name: {

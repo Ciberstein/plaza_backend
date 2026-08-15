@@ -38,7 +38,14 @@ router.post(
 
 router.post("/:id/archive", middlewares.products.owned, controllers.products.archive);
 
-router.delete("/:id", middlewares.products.owned, controllers.products.remove);
+router.delete(
+  "/:id",
+  middlewares.products.owned,
+  // Narrower than the rest of the catalogue: a collaborator may edit and
+  // archive anything the shop lists, and delete only what they listed.
+  middlewares.products.deletable,
+  controllers.products.remove,
+);
 
 /* photographs */
 

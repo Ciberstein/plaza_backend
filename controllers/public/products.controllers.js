@@ -3,6 +3,7 @@ const catchAsync = require("../../utils/catchAsync.util");
 const AppError = require("../../utils/appError.util");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
+const Geo = require("../../models/geo.models");
 const { Category } = require("../../models/categories.models");
 
 // Only what a listing needs to be shown. The seller's account id is not part
@@ -104,18 +105,178 @@ const averages = async (model, key, ids) => {
 // can read `.count` without checking whether there is anything to read.
 const UNRATED = { average: null, count: 0 };
 
-// A parent category means its children too. Someone browsing "Home" expects
-// the things filed under "Kitchen", and the seller filed them precisely.
-const categoryIds = async (slug) => {
-  const parent = await Category.findOne({ where: { slug, active: true } });
-  if (!parent) return null;
+/* ─── properties ──────────────────────────────────────────────────────────── */
 
-  const children = await Category.findAll({
-    where: { parentId: parent.id, active: true },
+// Read whole from the database and trimmed here. The raw address is needed to
+// derive the shortened one, and the shortening has to happen on this side of
+// the wire: an address sent in full and hidden by a stylesheet is not hidden.
+const PROPERTY_ATTRS = [
+  "productId", "operation", "condition", "builtArea", "privateArea", "lotArea",
+  "bedrooms", "bathrooms", "halfBaths", "parking", "stratum", "floor",
+  "builtYear", "adminFee", "adminIncluded", "features", "neighborhood",
+  "address", "addressVisibility", "phonePublic", "latitude", "longitude",
+];
+
+/**
+ * As much of the address as the owner chose to show.
+ *
+ * The split is on '#', which is where a Colombian address stops naming the
+ * street and starts naming the door: "Calle 45 # 12-34" is a block anybody can
+ * find and a flat only the owner should hand out. Stripping trailing digits
+ * would be the European rule and would turn "Calle 45" into "Calle".
+ */
+const publicAddress = (property) => {
+  if (!property?.address) return null;
+
+  switch (property.addressVisibility) {
+    case "exact": return property.address;
+    case "street": return property.address.split("#")[0].trim() || null;
+    default: return null;
+  }
+};
+
+// Coordinates precise enough to place a listing on a street are the address by
+// another name, so they follow the same choice the address did. Withheld
+// entirely rather than blurred here — a fuzzed point is the map's problem and
+// inventing one in this layer would put a false coordinate in the payload.
+const publicPoint = (property) =>
+  property?.addressVisibility === "exact"
+    ? { latitude: property.latitude, longitude: property.longitude }
+    : { latitude: null, longitude: null };
+
+/**
+ * The property block as a stranger may see it.
+ *
+ * `address` is replaced rather than removed, so the shape is the same whatever
+ * the owner chose and the interface has one field to read instead of a
+ * condition to evaluate. `phone` is present only when the owner asked for it
+ * to be.
+ */
+const publicProperty = (property, seller) => {
+  if (!property) return null;
+
+  return {
+    ...property.toJSON(),
+    ...publicPoint(property),
+    address: publicAddress(property),
+    phone: property.phonePublic ? dialable(seller) : null,
+  };
+};
+
+// The seller's number, assembled the way the orders endpoints assemble it, so
+// a number reads the same wherever it is shown.
+const dialable = (account) =>
+  account?.phone ? `${account.phoneCountry?.dialCode ?? ""}${account.phone}` : null;
+
+// A whole number from a query string, or null. `Number("")` is 0, which as a
+// minimum-bedrooms filter would quietly mean "at least none".
+const whole = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * The filters that only mean something for a property.
+ *
+ * Written onto a `where` for the joined table rather than the listing, except
+ * price, which lives on the listing because it is the same column a shirt uses.
+ */
+const propertyWhere = (query) => {
+  const where = {};
+
+  // One or the other, never several: with two values, choosing both is the
+  // same as choosing neither, and a filter whose "all" state has two spellings
+  // is a filter that reads as broken.
+  if (Market.PROPERTY_OPERATION.includes(query.operation)) where.operation = query.operation;
+
+  // The condition is different — new and off-plan are a pair somebody means
+  // together, and being made to search twice for them is what stops the filter
+  // being used at all.
+  const conditions = list(query.propertyCondition)
+    .filter(value => Market.PROPERTY_CONDITION.includes(value));
+
+  if (conditions.length) where.condition = { [Op.in]: conditions };
+
+  // Minimums, not exact matches. Somebody who needs three bedrooms is not
+  // turned away from a four-bedroom flat, which is what `= 3` would do.
+  const atLeast = { bedrooms: "bedrooms", bathrooms: "bathrooms", parking: "parking" };
+
+  for (const [param, column] of Object.entries(atLeast)) {
+    const min = whole(query[param]);
+    if (min !== null) where[column] = { [Op.gte]: min };
+  }
+
+  const minArea = whole(query.minArea);
+  const maxArea = whole(query.maxArea);
+
+  if (minArea !== null || maxArea !== null) {
+    where.builtArea = {
+      ...(minArea !== null && { [Op.gte]: minArea }),
+      ...(maxArea !== null && { [Op.lte]: maxArea }),
+    };
+  }
+
+  // Several strata at once: somebody looking at 3 is usually looking at 4 too.
+  const strata = String(query.stratum ?? "")
+    .split(",")
+    .map(whole)
+    .filter(s => s !== null && s >= Market.MIN_STRATUM && s <= Market.MAX_STRATUM);
+
+  if (strata.length) where.stratum = { [Op.in]: strata };
+
+  // All of them, not any: somebody who ticked lift and parking wants both.
+  const features = String(query.features ?? "")
+    .split(",")
+    .map(f => f.trim())
+    .filter(f => Market.PROPERTY_FEATURE.includes(f));
+
+  if (features.length) where.features = { [Op.contains]: features };
+
+  return where;
+};
+
+// A comma-separated query parameter, as a list. One value and several are the
+// same shape, so nothing downstream has to ask which it got.
+const list = (value) =>
+  String(value ?? "")
+    .split(",")
+    .map(item => item.trim())
+    .filter(Boolean);
+
+/**
+ * The categories a browse should look in.
+ *
+ * A parent means its children too: someone browsing "Vivienda" expects the
+ * things filed under "Apartamento", and the seller filed them precisely.
+ *
+ * Several at once, because narrowing a property search is not the same job as
+ * browsing a shop. Somebody who will live in a flat will usually also live in
+ * an apartaestudio, and being made to choose one and search twice is how a
+ * filter stops being used.
+ *
+ * An unknown slug contributes nothing rather than failing the whole query: a
+ * stale link with one dead slug among four should return the other three.
+ */
+const categoryIds = async (slugs) => {
+  const wanted = list(slugs);
+  if (!wanted.length) return null;
+
+  const parents = await Category.findAll({
+    where: { slug: wanted, active: true },
     attributes: ["id"],
   });
 
-  return [parent.id, ...children.map(c => c.id)];
+  if (!parents.length) return [];
+
+  const ids = parents.map(c => c.id);
+
+  const children = await Category.findAll({
+    where: { parentId: ids, active: true },
+    attributes: ["id"],
+  });
+
+  return [...ids, ...children.map(c => c.id)];
 };
 
 exports.list = catchAsync(async (req, res, next) => {
@@ -126,14 +287,32 @@ exports.list = catchAsync(async (req, res, next) => {
   // started returning plumbers to them would be a breaking change.
   where.kind = Market.LISTING_KIND.includes(req.query.kind) ? req.query.kind : "good";
 
-  if (req.query.cityId) where.cityId = req.query.cityId;
+  // Several towns at once. Somebody moving for work looks at the city they
+  // will work in and the two they could commute from, and one at a time makes
+  // that three searches whose results cannot be compared side by side.
+  const cityIds = list(req.query.cityId);
+  if (cityIds.length) where.cityId = { [Op.in]: cityIds };
   if (req.query.shopId) where.shopId = req.query.shopId;
+
+  // On the listing rather than on the property, because it is the same column
+  // a shirt is priced in. What it means changes with the operation — an asking
+  // price or a month's rent — which is exactly why a listing is one or the
+  // other and never both.
+  const minPrice = whole(req.query.minPrice);
+  const maxPrice = whole(req.query.maxPrice);
+
+  if (minPrice !== null || maxPrice !== null) {
+    where.price = {
+      ...(minPrice !== null && { [Op.gte]: minPrice }),
+      ...(maxPrice !== null && { [Op.lte]: maxPrice }),
+    };
+  }
 
   if (req.query.category) {
     const ids = await categoryIds(req.query.category);
     // An unknown category is an empty shelf, not an error: the URL may simply
     // be old, and a 404 on a browse page is a worse answer than "nothing here".
-    if (!ids) return res.status(200).json([]);
+    if (!ids || !ids.length) return res.status(200).json([]);
     where.categoryId = { [Op.in]: ids };
   }
 
@@ -149,10 +328,37 @@ exports.list = catchAsync(async (req, res, next) => {
     ];
   }
 
+  const isProperty = where.kind === "property";
+  const regions = list(req.query.region);
+
+  // `required: true` when the aisle is properties, which makes the join do the
+  // filtering: a listing whose property row does not match is not a result.
+  // Searching by department goes through the city rather than a column of its
+  // own — `geo.cities.region` already holds it for every city.
+  const include = [SHOP, SELLER];
+
+  if (isProperty) {
+    include.push({
+      model: Market.Property,
+      as: "property",
+      attributes: PROPERTY_ATTRS,
+      where: propertyWhere(req.query),
+      required: true,
+    });
+
+    include.push({
+      model: Geo.City,
+      as: "city",
+      attributes: ["id", "name", "region"],
+      where: regions.length ? { region: { [Op.in]: regions } } : undefined,
+      required: regions.length > 0,
+    });
+  }
+
   const products = await Market.Product.findAll({
     where,
     attributes: PUBLIC_ATTRS,
-    include: [SHOP, SELLER],
+    include,
     order: [["createdAt", "DESC"]],
     ...page(req.query),
     // Without this the limit is applied in a subquery that the `$shop.status$`
@@ -193,6 +399,10 @@ exports.list = catchAsync(async (req, res, next) => {
         // has to learn about the other four.
         cover: images[0]?.url ?? null,
         rating: rated.get(product.id) ?? UNRATED,
+        // A card never shows a phone number, so none is assembled for one. The
+        // address still goes through the same trimming: a grid is as public as
+        // a page.
+        ...(product.property && { property: publicProperty(product.property, null) }),
       };
     })
   );
@@ -240,6 +450,8 @@ exports.get = catchAsync(async (req, res, next) => {
       SHOP,
       SELLER,
       { model: Market.ProductImage, as: "images", attributes: ["id", "url", "position"] },
+      { model: Market.Property, as: "property", attributes: PROPERTY_ATTRS, required: false },
+      { model: Geo.City, as: "city", attributes: ["id", "name", "region"], required: false },
     ],
     order: [[{ model: Market.ProductImage, as: "images" }, "position", "ASC"]],
     subQuery: false,
@@ -247,11 +459,34 @@ exports.get = catchAsync(async (req, res, next) => {
 
   if (!product) return next(new AppError("Listing not found", 404));
 
+  /**
+   * The seller's phone, fetched separately and only when it is going to be
+   * shown.
+   *
+   * Not added to `SELLER`, which every listing uses: a phone column on that
+   * include would travel with every product page whether or not anybody meant
+   * to publish it, and one `toJSON()` spread would put it in the response. A
+   * second small query by primary key is the cost of it being impossible to
+   * leak by accident rather than merely unlikely.
+   */
+  const owner = product.property?.phonePublic && product.seller
+    ? await Accounts.Account.findByPk(product.seller.id, {
+        attributes: ["id", "phone"],
+        include: [{ model: Geo.Country, as: "phoneCountry", attributes: ["dialCode"], required: false }],
+      })
+    : null;
+
   // Two different numbers, and a shopper reads them differently: one says
-  // whether the thing is good, the other whether the person behind it is.
-  const [listing, seller] = await Promise.all([
+  // whether the thing is good, the other whether whoever is behind it is.
+  //
+  // "Whoever" is the shop when there is one. An agency's reputation is the
+  // agency's — a buyer choosing between two of them is not choosing between
+  // whichever agents happened to answer, and an agent who leaves does not take
+  // the stars with them.
+  const [listing, seller, brand] = await Promise.all([
     averages(Market.ProductReview, "productId", [product.id]),
     averages(Market.SellerRating, "sellerId", [product.seller?.id].filter(Boolean)),
+    averages(Market.SellerRating, "shopId", [product.shop?.id].filter(Boolean)),
   ]);
 
   return res.status(200).json({
@@ -261,6 +496,11 @@ exports.get = catchAsync(async (req, res, next) => {
       ...product.seller.toJSON(),
       rating: seller.get(product.seller.id) ?? UNRATED,
     },
+    shop: product.shop && {
+      ...product.shop.toJSON(),
+      rating: brand.get(product.shop.id) ?? UNRATED,
+    },
+    ...(product.property && { property: publicProperty(product.property, owner) }),
   });
 });
 
