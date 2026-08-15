@@ -8,12 +8,17 @@ const middlewares = {
   orders: require("../../middlewares/user/orders.middlewares"),
 };
 
+const throttle = require("../../middlewares/throttle.middlewares");
+
 const router = express.Router();
 
 // What this person bought.
 router.get("/", controllers.orders.list);
 
-router.post("/", middlewares.orders.basket, controllers.orders.create);
+// One order mails every seller in it, so a basket of twenty listings is twenty
+// messages from one request. Placing an order also takes stock down, which is
+// its own brake, but the mail leaves whether or not the stock ever comes back.
+router.post("/", throttle.mailing, middlewares.orders.basket, controllers.orders.create);
 
 router.get("/:id", middlewares.orders.purchased, controllers.orders.get);
 

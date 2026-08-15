@@ -6,6 +6,7 @@ const controllers = {
 };
 
 const upload = require("../../middlewares/upload.middlewares");
+const throttle = require("../../middlewares/throttle.middlewares");
 
 const router = express.Router();
 
@@ -28,7 +29,7 @@ router.post("/email/confirm", sensitive, controllers.accounts.confirmEmailChange
 
 router.patch("/password", sensitive, controllers.accounts.updatePassword);
 
-router.post("/avatar", upload.single("image"), controllers.accounts.uploadAvatar);
+router.post("/avatar", throttle.uploads, upload.single("image"), controllers.accounts.uploadAvatar);
 router.delete("/avatar", controllers.accounts.deleteAvatar);
 
 module.exports = router;

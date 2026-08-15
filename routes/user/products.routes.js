@@ -9,6 +9,8 @@ const middlewares = {
   upload: require("../../middlewares/upload.middlewares"),
 };
 
+const throttle = require("../../middlewares/throttle.middlewares");
+
 const router = express.Router();
 
 router.get("/", controllers.products.list);
@@ -40,8 +42,11 @@ router.delete("/:id", middlewares.products.owned, controllers.products.remove);
 
 /* photographs */
 
+// Billed per call by Cloudinary, so the ceiling is on the account that will be
+// billed rather than on the address it was sent from.
 router.post(
   "/:id/images",
+  throttle.uploads,
   middlewares.products.owned,
   middlewares.upload.single("image"),
   controllers.products.addImage

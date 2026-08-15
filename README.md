@@ -38,6 +38,23 @@ without a sensible default:
 | `CORS_ORIGINS` | defaults to `http://localhost:5173`, and credentials forbid a wildcard, so the list is explicit |
 | `RESEND_API_KEY` | mail is skipped, every send reports false, the server still boots |
 | `CLOUDINARY_*` | upload endpoints answer `503` rather than failing at 500 |
+| `TRUST_PROXY` | defaults to `0`. Behind a proxy that is wrong, and every rate limit becomes one shared bucket — see below |
+
+`TRUST_PROXY` is the number of proxies in front of this process: `0` locally,
+`1` behind a single load balancer, which is what Render, Railway, Fly and
+Heroku each give you. **It has to match the real topology, and being wrong in
+either direction breaks something quietly.**
+
+Too low, and every request looks like it came from the proxy: the whole
+internet shares one bucket, and ten failed logins by anybody lock out
+everybody. Too high — including setting it at all when nothing is in front —
+and Express believes the `X-Forwarded-For` header, which is written by whoever
+is calling. Both were measured rather than assumed: against a limit of 90 a
+minute, a direct caller forging the header at `TRUST_PROXY=0` was refused after
+90 requests, and at `TRUST_PROXY=1` with no proxy present the same caller got a
+fresh 90 for every address it invented. That is rate limiting switched off
+while still looking switched on, which is why the default is `0` and why the
+server says so on boot when it is `0` in production.
 
 `CLOUDINARY_FOLDER` decides the root every upload is filed under, `plaza` by
 default. One Cloudinary account usually serves every environment, so give each
@@ -212,6 +229,20 @@ confirmed and never before. They are nulled server-side rather than hidden by
 the interface: if they travelled on every response and only the page declined to
 draw them, placing an order and reading the response would be a way of
 harvesting people.
+
+**What is limited is what costs someone something.** `middlewares/throttle.middlewares.js`
+holds four ceilings, and they are not one number applied everywhere because the
+things being protected are not alike. A baseline over the whole API catches the
+blunt hammer. Browsing and searching are lower, because a search cannot use an
+index and so one request costs whatever the catalogue happens to weigh.
+Uploads and anything that sends mail are keyed **by account rather than by
+address**: an address is shared by everyone behind a carrier's NAT and rotated
+at will by anyone who cares, while an account costs a verified email — the
+price of a fresh bucket should be higher than the price of waiting. On top of
+that, one person may leave at most three unanswered questions on one listing,
+because twenty questions an hour across twenty listings is a curious shopper
+and twenty on one is a seller being shouted at, and a rate limit cannot tell
+those apart.
 
 **A question's answer is a column, not another question.** `product_questions`
 holds the seller's reply in `answer` and `answeredAt` rather than in a second

@@ -15,6 +15,16 @@ const templates = require("../../mail/templates");
  */
 const PUBLIC_FIELDS = ["id", "productId", "body", "answer", "answeredAt", "createdAt"];
 
+// How many unanswered questions one person may have waiting on one listing.
+//
+// The rate limiter bounds the hour; this bounds the listing, and they are not
+// the same protection. Twenty questions an hour spread over twenty listings is
+// a curious shopper, and twenty on one is a seller being shouted at. A second
+// question while the first is unanswered is a fair nudge, a third is the end
+// of it — and the count is of unanswered ones, so a seller who replies always
+// clears the way for the next.
+const MAX_PENDING_PER_LISTING = 3;
+
 /**
  * Sends without being waited for.
  *
@@ -73,6 +83,20 @@ exports.ask = catchAsync(async (req, res, next) => {
 
   if (product.accountId === req.sessionAccount.id) {
     return next(new AppError("You cannot ask a question on your own listing", 409));
+  }
+
+  const pending = await Market.ProductQuestion.count({
+    where: {
+      productId: product.id,
+      accountId: req.sessionAccount.id,
+      answer: null,
+    },
+  });
+
+  if (pending >= MAX_PENDING_PER_LISTING) {
+    return next(
+      new AppError("You already have questions waiting on this listing", 429)
+    );
   }
 
   const question = await Market.ProductQuestion.create({

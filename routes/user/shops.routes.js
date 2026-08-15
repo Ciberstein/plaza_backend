@@ -9,6 +9,8 @@ const middlewares = {
   upload: require("../../middlewares/upload.middlewares"),
 };
 
+const throttle = require("../../middlewares/throttle.middlewares");
+
 const router = express.Router();
 
 router.get("/", controllers.shops.list);
@@ -26,6 +28,7 @@ router.patch("/:id", middlewares.shops.owned, controllers.shops.update);
 
 router.post(
   "/:id/logo",
+  throttle.uploads,
   middlewares.shops.owned,
   middlewares.upload.single("image"),
   controllers.shops.uploadLogo
