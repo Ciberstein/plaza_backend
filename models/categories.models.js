@@ -23,6 +23,17 @@ const Category = db.define(
       allowNull: true,
       field: "parentId",
     },
+    // Which aisle this belongs to: the one selling things, or the one selling
+    // work. A category is never both — "Plumbing" as a service and as a box of
+    // fittings are different things filed in different places — so the form
+    // only ever offers the tree that matches what is being published.
+    kind: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "good",
+      validate: { isIn: [["good", "service"]] },
+      field: "kind",
+    },
     name: {
       type: DataTypes.STRING,
       allowNull: false,

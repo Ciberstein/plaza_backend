@@ -132,7 +132,8 @@ a listing, allowing both is an impersonation waiting to happen.
 ```
 GET    /public/meta              categories, countries, cities, shipping,
                                  conditions, delivery options
-GET    /public/products          q, category, cityId, shopId, limit, offset
+GET    /public/products          kind, q, category, cityId, shopId, limit, offset
+                                 kind is good (default) or service
 GET    /public/products/:id
 GET    /public/products/:id/questions
 GET    /public/shops
@@ -243,6 +244,39 @@ that, one person may leave at most three unanswered questions on one listing,
 because twenty questions an hour across twenty listings is a curious shopper
 and twenty on one is a seller being shouted at, and a rate limit cannot tell
 those apart.
+
+**A service is a listing, not a second kind of row.** `products.kind` is
+`good` or `service`, and one table carries both. Five things point at a
+listing — a basket line, a favourite, a photograph, an order line, a question —
+and a separate `services` table would have made every one of those
+relationships polymorphic to spare four columns. What actually differs is
+small: a service is priced by `rateUnit` (an hour, a day, the whole job) or
+not priced at all, has no condition, and has no shelf. What it shares is
+everything else.
+
+**Nothing comes off a shelf a service does not have.** Stock is untouched when
+one is ordered and untouched again when the order is cancelled — restocking it
+would hand a provider free inventory on every cancellation until "3 available"
+appeared on something that never had a shelf — and `stockStatus` returns early
+for them, or every service would go `out_of_stock` the moment it was published.
+
+**A quoted service keeps a null price all the way to the order line.** A
+contractor cannot cost a renovation before seeing the room, so `price` and
+`order_items.unitPrice` are both nullable. Zero was the alternative and it is a
+worse record: it says somebody agreed to work for nothing. The order total sums
+what was priced, and the rest is settled once the seller accepts — which is
+what the pending → confirmed → contact-revealed flow was already for.
+
+**A service is asked for on its own.** It is refused from the basket and
+refused inside an order that holds anything else: a plumber and a pair of
+headphones under one order that is confirmed, handed over and cancelled as a
+single thing is not what either of them is.
+
+**The two category trees never mix.** `categories.kind` splits them, the form
+is only ever offered the tree matching what is being published, and the API
+refuses a listing filed against the other one — a caregiver under Televisores
+is a listing no shopper will ever find. Slugs stay unique across both, so a
+category URL needs no aisle in it.
 
 **A question's answer is a column, not another question.** `product_questions`
 holds the seller's reply in `answer` and `answeredAt` rather than in a second

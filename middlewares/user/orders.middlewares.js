@@ -62,11 +62,23 @@ exports.basket = catchAsync(async (req, res, next) => {
     return next(new AppError("Something in your basket is no longer for sale", 409));
   }
 
-  const short = products.filter(p => p.stock < wanted.get(p.id));
+  // Only a thing can run short. A service has no shelf, so how many hours were
+  // asked for is a question for the provider and not for the stock column.
+  const short = products.filter(p => p.kind !== "service" && p.stock < wanted.get(p.id));
 
   if (short.length) {
     const names = short.map(p => `${p.title} (${p.stock} left)`).join(", ");
     return next(new AppError(`Not enough left: ${names}`, 409));
+  }
+
+  // A request for somebody's time is made to that person, on its own. Letting
+  // one ride along with a basket of objects would put a plumber and a pair of
+  // headphones under a single order that is cancelled, confirmed and handed
+  // over as one thing, which is not what either of those is.
+  const services = products.filter(p => p.kind === "service");
+
+  if (services.length && products.length > 1) {
+    return next(new AppError("Ask for a service on its own, not with other listings", 409));
   }
 
   const own = products.filter(p => p.accountId === req.sessionAccount.id);

@@ -93,6 +93,14 @@ exports.add = catchAsync(async (req, res, next) => {
 
   if (!buyable(product)) return next(new AppError("That listing is not for sale", 409));
 
+  // A basket is for things that get packed together and carried away. A
+  // service is an arrangement with one person about their time, and it is
+  // asked for directly rather than collected — there is no version of "three
+  // caregivers and a pair of headphones" that means anything to anybody.
+  if (product.kind === "service") {
+    return next(new AppError("A service is requested directly, not added to a basket", 409));
+  }
+
   if (product.accountId === req.sessionAccount.id) {
     return next(new AppError("You cannot buy your own listing", 409));
   }

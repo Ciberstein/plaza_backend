@@ -13,7 +13,7 @@ exports.index = catchAsync(async (_req, res) => {
   const [categories, countries] = await Promise.all([
     Category.findAll({
       where: { active: true },
-      attributes: ["id", "parentId", "name", "slug", "position"],
+      attributes: ["id", "parentId", "name", "slug", "position", "kind"],
       order: [["position", "ASC"], ["name", "ASC"]],
     }),
     Geo.Country.findAll({
@@ -39,15 +39,24 @@ exports.index = catchAsync(async (_req, res) => {
   // fact the frontend's forms validate against — is served here. The words
   // for it live in the frontend's own translation catalogue.
   return res.status(200).json({
+    // Both trees in one list, each carrying the aisle it belongs to. The form
+    // shows the one matching what is being published, and the header shows
+    // whichever the visitor is browsing — neither needs a second request.
     categories: categories
       .filter(c => c.parentId === null)
       .map(parent => ({
         value: parent.id,
         slug: parent.slug,
         label: parent.name,
+        kind: parent.kind,
         children: categories
           .filter(child => child.parentId === parent.id)
-          .map(child => ({ value: child.id, slug: child.slug, label: child.name })),
+          .map(child => ({
+            value: child.id,
+            slug: child.slug,
+            label: child.name,
+            kind: child.kind,
+          })),
       })),
     countries: countries.map(c => ({
       value: c.id,
@@ -66,5 +75,11 @@ exports.index = catchAsync(async (_req, res) => {
     shipping: Market.SHIPPING_MODE.map(value => ({ value })),
     conditions: Market.PRODUCT_CONDITION.map(value => ({ value })),
     delivery: Market.DELIVERY_OPTION.map(value => ({ value })),
+    // The service half of the same vocabulary: what a rate buys, and where the
+    // work is carried out. `serviceDelivery` answers the same question
+    // `delivery` does — how the two of you meet — for a listing that is
+    // somebody's time rather than a parcel.
+    rateUnits: Market.RATE_UNIT.map(value => ({ value })),
+    serviceDelivery: Market.SERVICE_OPTION.map(value => ({ value })),
   });
 });

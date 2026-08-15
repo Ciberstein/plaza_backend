@@ -4,8 +4,8 @@ const cloudinary = require("../../utils/cloudinary.util");
 const Market = require("../../models/market.models");
 
 const PRODUCT_ATTRS = [
-  "id", "shopId", "categoryId", "cityId",
-  "title", "description", "price", "currency", "stock", "status",
+  "id", "kind", "shopId", "categoryId", "cityId",
+  "title", "description", "price", "rateUnit", "currency", "stock", "status",
   "condition", "delivery", "createdAt",
 ];
 
@@ -49,7 +49,12 @@ const reload = (id) =>
  * Draft and archived are left alone: they are deliberate states, and a seller
  * who archived something does not want it back because a number moved.
  */
-const stockStatus = (status, stock) => {
+const stockStatus = (status, stock, kind = "good") => {
+  // Nobody keeps four caregivers in reserve. A service has no shelf to run
+  // empty, and its stock column sits at whatever the default was — reading it
+  // would take every service off the square the moment it was published.
+  if (kind === "service") return status;
+
   // Drafts and archived listings are deliberate states. A number moving is not
   // a reason to drag something back out of a drawer someone put it in.
   if (!LISTED.includes(status)) return status;
@@ -89,21 +94,27 @@ exports.get = catchAsync(async (req, res) => {
 
 exports.create = catchAsync(async (req, res) => {
   const {
-    title, description, price, stock, categoryId, cityId, shopId, currency,
-    condition, delivery,
+    kind, title, description, price, stock, categoryId, cityId, shopId, currency,
+    condition, delivery, rateUnit,
   } = req.body;
+
+  const isService = kind === "service";
 
   const product = await Market.Product.create({
     accountId: req.sessionAccount.id,
+    kind: kind ?? "good",
     shopId: shopId ?? null,
     categoryId: categoryId ?? null,
     cityId: cityId ?? null,
     title,
     description: description?.trim() || null,
-    price: price ?? 0,
+    // Null means quoted, and only a service may be. `?? 0` would turn "on
+    // request" into free, which is a different offer entirely.
+    price: isService ? (price ?? null) : (price ?? 0),
+    rateUnit: isService ? (rateUnit ?? null) : null,
     currency: currency || "COP",
-    stock: stock ?? 0,
-    condition: condition ?? null,
+    stock: isService ? 0 : (stock ?? 0),
+    condition: isService ? null : (condition ?? null),
     delivery: delivery ?? [],
     // Draft, not active: nothing reaches the square before its photographs do.
     status: "draft",
@@ -115,21 +126,39 @@ exports.create = catchAsync(async (req, res) => {
 exports.update = catchAsync(async (req, res, next) => {
   const {
     title, description, price, stock, categoryId, cityId, shopId, currency,
-    condition, delivery, availability,
+    condition, delivery, availability, rateUnit,
   } = req.body;
   const updates = {};
+  const isService = req.product.kind === "service";
+
+  // Sent as null by the form when the seller switches to "on request", so
+  // `!== undefined` rather than a truthiness check: null is the answer here,
+  // not the absence of one.
+  if (isService && price !== undefined) {
+    updates.price = price === null || price === "" ? null : price;
+    updates.rateUnit = updates.price === null ? null : (rateUnit ?? req.product.rateUnit);
+  } else if (isService && rateUnit !== undefined) {
+    updates.rateUnit = rateUnit;
+  }
 
   if (title?.trim()) updates.title = title.trim();
   if (description !== undefined) updates.description = description?.trim() || null;
-  if (price !== undefined) updates.price = price;
+  // A service's price was already settled above, together with its rate unit,
+  // because for a service the two are one answer.
+  if (!isService && price !== undefined) updates.price = price;
   if (currency) updates.currency = currency;
   if (categoryId !== undefined) updates.categoryId = categoryId || null;
   if (cityId !== undefined) updates.cityId = cityId || null;
   if (shopId !== undefined) updates.shopId = shopId || null;
 
-  if (condition !== undefined) updates.condition = condition || null;
   if (delivery !== undefined) updates.delivery = delivery;
-  if (stock !== undefined) updates.stock = stock;
+
+  // Neither belongs to a service, and the validation has already refused them
+  // rather than letting them arrive and be ignored here.
+  if (!isService) {
+    if (condition !== undefined) updates.condition = condition || null;
+    if (stock !== undefined) updates.stock = stock;
+  }
 
   // Pausing and unpausing is the one status change that belongs on the form,
   // because to the seller it is a property of the listing rather than an event.
@@ -152,6 +181,7 @@ exports.update = catchAsync(async (req, res, next) => {
   updates.status = stockStatus(
     updates.status ?? req.product.status,
     updates.stock ?? req.product.stock,
+    req.product.kind,
   );
 
   await req.product.update(updates);
@@ -172,7 +202,7 @@ exports.publish = catchAsync(async (req, res, next) => {
     return next(new AppError(`A listing that is ${product.status} cannot be published`, 409));
   }
 
-  await product.update({ status: stockStatus("active", product.stock) });
+  await product.update({ status: stockStatus("active", product.stock, product.kind) });
 
   // Listing something is what turns a buyer into a seller. The role is widened,
   // never narrowed — an admin who lists something stays an admin.

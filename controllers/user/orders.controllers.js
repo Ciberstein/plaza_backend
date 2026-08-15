@@ -215,11 +215,15 @@ exports.create = catchAsync(async (req, res) => {
   const basket = req.basket;
   const currency = basket[0].product.currency;
 
+  // A quoted service has no price yet, so it contributes nothing to the total
+  // rather than poisoning it with NaN. The order still reads honestly: what is
+  // agreed so far is the sum of what was priced, and the rest is settled
+  // between the two of them once the seller accepts.
+  const lineTotal = (line) =>
+    line.product.price === null ? 0 : Number(line.product.price) * line.quantity;
+
   const order = await db.transaction(async (tx) => {
-    const total = basket.reduce(
-      (sum, line) => sum + Number(line.product.price) * line.quantity,
-      0,
-    );
+    const total = basket.reduce((sum, line) => sum + lineTotal(line), 0);
 
     const created = await Market.Order.create(
       {
@@ -242,10 +246,7 @@ exports.create = catchAsync(async (req, res) => {
     }
 
     for (const lines of groups.values()) {
-      const subtotal = lines.reduce(
-        (sum, line) => sum + Number(line.product.price) * line.quantity,
-        0,
-      );
+      const subtotal = lines.reduce((sum, line) => sum + lineTotal(line), 0);
 
       const suborder = await Market.SubOrder.create(
         {
@@ -272,6 +273,12 @@ exports.create = catchAsync(async (req, res) => {
           },
           { transaction: tx },
         );
+
+        // Nothing comes off a shelf a service does not have. Somebody's time
+        // is not held in reserve by an unanswered request, and taking a
+        // caregiver "out of stock" because one person asked would hide them
+        // from everyone else while the seller thinks about it.
+        if (product.kind === "service") continue;
 
         const left = product.stock - quantity;
 
@@ -393,6 +400,12 @@ const restock = async (subOrderId, tx) => {
 
     const product = await Market.Product.findByPk(item.productId, { transaction: tx });
     if (!product) continue;
+
+    // Nothing was taken from a service, so nothing goes back. Adding the
+    // quantity here would hand a provider free stock every time a request was
+    // called off, and after enough cancellations "3 available" would appear on
+    // a listing that never had a shelf.
+    if (product.kind === "service") continue;
 
     const back = product.stock + item.quantity;
 

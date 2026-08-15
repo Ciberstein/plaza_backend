@@ -32,9 +32,36 @@ const PRODUCT_STATUS = ["draft", "active", "paused", "out_of_stock", "archived"]
 // is precisely the lie the field exists to prevent.
 const PRODUCT_CONDITION = ["new", "like_new", "good", "acceptable", "for_parts"];
 
+// What is being sold. A listing is a thing or it is somebody's time, and
+// almost everything else about it follows from which.
+//
+//   good     an object. It has a condition, a shelf, and a way of travelling.
+//   service  work. It has a rate, no shelf, and a place it is carried out.
+//
+// One column on one table rather than two tables: a basket line, a favourite,
+// a photograph, an order line and a question all point at a listing, and
+// making that pointer mean two things would make five relationships
+// polymorphic to spare four columns.
+const LISTING_KIND = ["good", "service"];
+
+// What the price of a service buys. `job` is the fixed quote — a bathroom
+// retiled, a portrait shot — where hours are the provider's problem and not
+// something the buyer is billed for.
+const RATE_UNIT = ["hour", "day", "job"];
+
 // How the seller is willing to hand the thing over. Several at once, because
 // most people who will post a parcel will also meet you in a cafe.
 const DELIVERY_OPTION = ["shipping", "door_delivery", "door_pickup", "public_meetup"];
+
+// The same question asked of a service: not how it travels, because it does
+// not, but where the two of you are when the work happens.
+const SERVICE_OPTION = ["at_client", "at_provider", "remote"];
+
+// Which set a listing's `delivery` column is checked against. The column holds
+// one answer to one question — how the two of you meet — and what counts as a
+// valid answer depends on whether there is a parcel or a person.
+const handoverOptions = (kind) =>
+  kind === "service" ? SERVICE_OPTION : DELIVERY_OPTION;
 const ORDER_STATUS = ["pending", "paid", "fulfilled", "cancelled", "refunded"];
 // No money changes hands online yet, so `paid` sits unused and `confirmed` is
 // the event that matters: the seller saying yes. Both sides may cancel, and
@@ -209,12 +236,36 @@ const Product = db.define(
       allowNull: true,
       field: "description",
     },
+    // A thing or somebody's time. Defaulted rather than required, because
+    // every row that existed before services did is a good, and a default is
+    // the honest answer for all of them.
+    kind: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: "good",
+      validate: { isIn: [LISTING_KIND] },
+      field: "kind",
+    },
     // Money is DECIMAL, never FLOAT: a rounding drift on a price is not a
     // cosmetic bug.
+    //
+    // Nullable only because a service may be quoted rather than priced: a
+    // contractor pricing a renovation cannot put a number on it before seeing
+    // the room. A good always carries one, which the validation enforces —
+    // without that, "price on request" becomes a way to publish an object with
+    // no price at all.
     price: {
       type: DataTypes.DECIMAL(12, 2),
-      allowNull: false,
+      allowNull: true,
       field: "price",
+    },
+    // What the price buys, for a service: an hour, a day, or the whole job.
+    // Null on a good, where the price buys the thing itself.
+    rateUnit: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      validate: { isIn: [RATE_UNIT] },
+      field: "rateUnit",
     },
     currency: {
       type: DataTypes.STRING(3),
@@ -244,6 +295,9 @@ const Product = db.define(
       validate: { isIn: [PRODUCT_CONDITION] },
       field: "condition",
     },
+    // How the two of you meet: where a parcel goes, or where the work happens.
+    // One question, and which answers are valid depends on the kind.
+    //
     // A Postgres array rather than a join table: the set is fixed, short, and
     // never queried on its own. A table would be four rows of ceremony per
     // listing to store what is really one answer.
@@ -254,7 +308,8 @@ const Product = db.define(
       validate: {
         known(value) {
           if (!Array.isArray(value)) throw new Error("Delivery must be a list");
-          const bad = value.filter(v => !DELIVERY_OPTION.includes(v));
+          const allowed = handoverOptions(this.kind);
+          const bad = value.filter(v => !allowed.includes(v));
           if (bad.length) throw new Error(`Unknown delivery option: ${bad.join(", ")}`);
         },
       },
@@ -417,9 +472,15 @@ const OrderItem = db.define(
       allowNull: false,
       field: "title",
     },
+    // Copied at the moment of ordering so that what someone agreed to pay keeps
+    // reading the same after the seller edits the price or deletes the listing.
+    //
+    // Null only for a service that was quoted rather than priced: the request
+    // is the start of the conversation about what it will cost, and writing 0
+    // there would record an agreement to do the work for nothing.
     unitPrice: {
       type: DataTypes.DECIMAL(12, 2),
-      allowNull: false,
+      allowNull: true,
       field: "unitPrice",
     },
     quantity: {
@@ -648,6 +709,7 @@ const Market = {
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
   PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,
   SHIPPING_MODE,
+  LISTING_KIND, RATE_UNIT, SERVICE_OPTION, handoverOptions,
 };
 
 module.exports = Market;

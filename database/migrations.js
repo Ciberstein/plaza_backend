@@ -21,6 +21,11 @@ const COLUMNS = [
   { table: '"market"."suborders"', column: 'accountId', definition: 'INTEGER' },
   { table: '"market"."suborders"', column: 'cancelledBy', definition: 'VARCHAR(255)' },
   { table: '"market"."suborders"', column: 'cancelReason', definition: 'TEXT' },
+  // Services. Every row that existed before them is a good, which is what the
+  // default says, so no backfill is needed and none is guessed at.
+  { table: '"market"."products"', column: 'kind', definition: "VARCHAR(255) NOT NULL DEFAULT 'good'" },
+  { table: '"market"."products"', column: 'rateUnit', definition: 'VARCHAR(255)' },
+  { table: '"market"."categories"', column: 'kind', definition: "VARCHAR(255) NOT NULL DEFAULT 'good'" },
 ];
 
 // The free-text category and city on a shop, replaced by references into
@@ -40,6 +45,13 @@ const NULLABLE = [
   { table: '"market"."products"', column: 'shopId' },
   // A purchase from someone who has no shop had nowhere to hang.
   { table: '"market"."suborders"', column: 'shopId' },
+  // A service may be quoted rather than priced — a contractor cannot cost a
+  // renovation before seeing the room. Goods are still required to carry one,
+  // which the validation enforces rather than the column.
+  { table: '"market"."products"', column: 'price' },
+  // And an order line for one has no agreed price yet. Zero would be a record
+  // of somebody agreeing to work for nothing.
+  { table: '"market"."order_items"', column: 'unitPrice' },
 ];
 
 /**

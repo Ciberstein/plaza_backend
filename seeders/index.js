@@ -3,6 +3,7 @@ const { Category } = require("../models/categories.models");
 const { slugify } = require("../utils/slug.util");
 const { countries, cities } = require("./data/geo.data.seeders");
 const { categories } = require("./data/categories.data.seeders");
+const { services } = require("./data/services.data.seeders");
 
 // Every seeder here inserts only the rows that are missing, matched on a
 // natural key, and never touches a row that already exists. Two consequences
@@ -74,14 +75,23 @@ const cities_seeder = async () => {
   });
 };
 
-const categories_seeder = async () => {
+/**
+ * One tree, of either kind.
+ *
+ * Both aisles are the same shape and the same table, so they are seeded by the
+ * same function with the kind carried through. The slug stays unique across
+ * the whole table — the two trees were written not to collide, and a child's
+ * slug is prefixed with its parent's, which keeps "Computadores" under
+ * repairs apart from "Computadores y portátiles" under technology.
+ */
+const category_tree = async ({ tree, kind, labels }) => {
   // Parents first, so the children have something to point at.
-  const parents = categories.map(({ name, slug, position }) => ({
-    name, slug, position, parentId: null,
+  const parents = tree.map(({ name, slug, position }) => ({
+    name, slug, position, kind, parentId: null,
   }));
 
   await seedMissing({
-    label: "CATEGORIES",
+    label: labels.parents,
     model: Category,
     entries: parents,
     keyOf: row => row.slug,
@@ -90,17 +100,18 @@ const categories_seeder = async () => {
   const stored = await Category.findAll({ attributes: ["id", "slug"] });
   const idOf = new Map(stored.map(c => [c.slug, c.id]));
 
-  const children = categories.flatMap(parent =>
+  const children = tree.flatMap(parent =>
     (parent.children ?? []).map((name, index) => ({
       name,
       slug: `${parent.slug}-${slugify(name)}`,
       position: index + 1,
+      kind,
       parentId: idOf.get(parent.slug) ?? null,
     }))
   ).filter(child => child.parentId !== null);
 
   return seedMissing({
-    label: "SUBCATEGORIES",
+    label: labels.children,
     model: Category,
     entries: children,
     keyOf: row => row.slug,
@@ -110,7 +121,18 @@ const categories_seeder = async () => {
 const seed = async () => {
   await countries_seeder();
   await cities_seeder();
-  await categories_seeder();
+
+  await category_tree({
+    tree: categories,
+    kind: "good",
+    labels: { parents: "CATEGORIES", children: "SUBCATEGORIES" },
+  });
+
+  await category_tree({
+    tree: services,
+    kind: "service",
+    labels: { parents: "SERVICE CATEGORIES", children: "SERVICE SUBCATEGORIES" },
+  });
 };
 
 module.exports = { seed, seedMissing };

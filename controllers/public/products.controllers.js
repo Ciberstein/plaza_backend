@@ -8,8 +8,8 @@ const { Category } = require("../../models/categories.models");
 // Only what a listing needs to be shown. The seller's account id is not part
 // of it, and neither is anything about how the row was made.
 const PUBLIC_ATTRS = [
-  "id", "shopId", "categoryId", "cityId",
-  "title", "description", "price", "currency", "stock", "status",
+  "id", "kind", "shopId", "categoryId", "cityId",
+  "title", "description", "price", "rateUnit", "currency", "stock", "status",
   "condition", "delivery", "createdAt",
 ];
 
@@ -84,6 +84,11 @@ const categoryIds = async (slug) => {
 
 exports.list = catchAsync(async (req, res, next) => {
   const where = { ...listed };
+
+  // Which aisle. Absent means goods, because that is what every caller asking
+  // for "products" before services existed meant, and a browse that quietly
+  // started returning plumbers to them would be a breaking change.
+  where.kind = Market.LISTING_KIND.includes(req.query.kind) ? req.query.kind : "good";
 
   if (req.query.cityId) where.cityId = req.query.cityId;
   if (req.query.shopId) where.shopId = req.query.shopId;
