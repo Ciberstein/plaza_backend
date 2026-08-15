@@ -154,6 +154,40 @@ exports.list = catchAsync(async (req, res, next) => {
   );
 });
 
+/**
+ * The questions on a listing, and whatever the seller answered.
+ *
+ * Public, and anonymous. `accountId` is on every row and is in none of these
+ * responses: the column exists so an answer can find its way back to whoever
+ * asked, not so the square can see who wanted to know whether something was
+ * genuine. Listed explicitly rather than deleted from the object afterwards,
+ * because a field that is never selected cannot be forgotten about later.
+ *
+ * Unanswered questions are public too. A question nobody has answered is
+ * itself worth reading — three of them about the same thing say something the
+ * description does not.
+ */
+exports.questions = catchAsync(async (req, res, next) => {
+  // Only for a listing the visitor could be looking at in the first place. The
+  // same door as the page itself, so a draft cannot be probed for questions.
+  const product = await Market.Product.findOne({
+    where: { id: req.params.id, ...addressable },
+    attributes: ["id"],
+    include: [SHOP],
+    subQuery: false,
+  });
+
+  if (!product) return next(new AppError("Listing not found", 404));
+
+  const questions = await Market.ProductQuestion.findAll({
+    where: { productId: product.id },
+    attributes: ["id", "productId", "body", "answer", "answeredAt", "createdAt"],
+    order: [["createdAt", "DESC"]],
+  });
+
+  return res.status(200).json(questions);
+});
+
 exports.get = catchAsync(async (req, res, next) => {
   const product = await Market.Product.findOne({
     where: { id: req.params.id, ...addressable },

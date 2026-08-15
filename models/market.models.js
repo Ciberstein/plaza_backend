@@ -57,6 +57,11 @@ const CANCELLED_BY = ["buyer", "seller"];
 // per product because it follows from how the seller works, not from the item.
 const SHIPPING_MODE = ["seller", "plaza", "pickup"];
 
+// A question is one question. The answer gets more room because it is the one
+// that has to explain something.
+const QUESTION_MAX = 500;
+const ANSWER_MAX = 1000;
+
 const Shop = db.define(
   "shops",
   {
@@ -566,9 +571,80 @@ const Favourite = db.define(
   }
 );
 
+/**
+ * A public question on a listing, and the seller's one answer to it.
+ *
+ * The answer is columns on the question rather than a second row pointing back
+ * at it. A self-referencing table would model a thread — any row answering any
+ * other — and the controller would then have to forbid, one rule at a time,
+ * everything the schema still allowed: two answers to one question, an answer
+ * to an answer, a stranger answering in the seller's place. There is exactly
+ * one answer and it always comes from the same person, so it is not another
+ * question. It is a field of this one, and "answered once, by the seller" is a
+ * fact of the table instead of a rule someone has to remember.
+ *
+ * `accountId` is stored and never published. It is how an answer finds its way
+ * back to whoever asked, and how a seller is kept from asking on their own
+ * listing — but the question is shown to everyone without a name on it, so
+ * that asking whether something is genuine does not put your name under it in
+ * public.
+ */
+const ProductQuestion = db.define(
+  "product_questions",
+  {
+    id: {
+      primaryKey: true,
+      autoIncrement: true,
+      allowNull: false,
+      type: DataTypes.INTEGER,
+      field: "id",
+    },
+    productId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "productId",
+    },
+    // Who asked. Never sent to a browser, by anyone, for any reason.
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      field: "accountId",
+    },
+    body: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+      validate: { len: [1, QUESTION_MAX] },
+      field: "body",
+    },
+    // Null means nobody has answered yet, which is the state the seller's
+    // inbox is built to find.
+    answer: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      validate: { len: [1, ANSWER_MAX] },
+      field: "answer",
+    },
+    // Kept beside the answer rather than derived from updatedAt, which moves
+    // for reasons that have nothing to do with answering.
+    answeredAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "answeredAt",
+    },
+  },
+  {
+    tableName: "product_questions",
+    schema: "market",
+    // Both reads are "this listing's questions, newest first" and "mine, still
+    // unanswered". The first is the one that runs on every listing view.
+    indexes: [{ fields: ["productId", "createdAt"] }],
+  }
+);
+
 const Market = {
   Shop, Product, ProductImage, Favourite, CartItem, Order, SubOrder, OrderItem,
-  MAX_PRODUCT_IMAGES,
+  ProductQuestion,
+  MAX_PRODUCT_IMAGES, QUESTION_MAX, ANSWER_MAX,
   SHOP_STATUS, PRODUCT_STATUS, ORDER_STATUS, SUBORDER_STATUS,
   PRODUCT_CONDITION, DELIVERY_OPTION, CANCELLED_BY,
   SHIPPING_MODE,

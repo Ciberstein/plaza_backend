@@ -117,6 +117,7 @@ GET    /public/meta              categories, countries, cities, shipping,
                                  conditions, delivery options
 GET    /public/products          q, category, cityId, shopId, limit, offset
 GET    /public/products/:id
+GET    /public/products/:id/questions
 GET    /public/shops
 GET    /public/shops/:slug
 ```
@@ -160,6 +161,10 @@ GET    /user/sales
 POST   /user/sales/:id/confirm
 POST   /user/sales/:id/deliver
 POST   /user/sales/:id/cancel
+
+GET    /user/questions           what buyers asked, unanswered first
+POST   /user/questions           ask one, productId in the body
+POST   /user/questions/:id/answer
 
 GET    /user/shops               POST to request one, PATCH to edit
 POST   /user/shops/:id/logo      DELETE to remove it
@@ -207,6 +212,28 @@ confirmed and never before. They are nulled server-side rather than hidden by
 the interface: if they travelled on every response and only the page declined to
 draw them, placing an order and reading the response would be a way of
 harvesting people.
+
+**A question's answer is a column, not another question.** `product_questions`
+holds the seller's reply in `answer` and `answeredAt` rather than in a second
+row pointing back with a `replyTo`. A self-referencing table would model a
+thread, and the controller would then have to forbid, one rule at a time,
+everything the schema still allowed: two answers to one question, an answer to
+an answer, a stranger answering in the seller's place. There is exactly one
+answer and it always comes from the same person, so "answered once, by the
+seller" is a fact of the table instead of a rule someone has to remember.
+
+**Questions are anonymous, and that is enforced by what is selected.**
+`accountId` is on every row — it is how an answer reaches whoever asked, and how
+a seller is stopped from asking on their own listing — and it is in no response,
+the seller's inbox included. The attribute lists name the columns to send rather
+than deleting one afterwards, because a field that is never selected cannot be
+forgotten about later.
+
+**Mail escapes everything a person typed.** Clients render HTML, so a question
+containing a link would arrive as a link in the seller's inbox, in a message
+from Plaza's own address and carrying Plaza's name — a phishing mail we posted
+ourselves. Titles, usernames and free text all go through `escape` in
+`mail/templates.js`; only the markup that file writes gets to be markup.
 
 **Nothing about money comes off the request.** A basket says what and how many;
 prices are read from the same table the listing page reads, and copied into

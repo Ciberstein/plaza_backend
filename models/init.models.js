@@ -191,6 +191,31 @@ const init = () => {
     as: "product",
   });
 
+  // CASCADE from the listing: a question about something that no longer exists
+  // answers nothing and is shown nowhere.
+  Market.Product.hasMany(Market.ProductQuestion, {
+    foreignKey: "productId",
+    as: "questions",
+    onDelete: "CASCADE",
+  });
+  Market.ProductQuestion.belongsTo(Market.Product, {
+    foreignKey: "productId",
+    as: "product",
+  });
+
+  // And CASCADE from the account, the way a favourite and a basket line do.
+  // The association is named `asker` to make it obvious at every call site
+  // that including it pulls in the one thing no response may carry.
+  Accounts.Account.hasMany(Market.ProductQuestion, {
+    foreignKey: "accountId",
+    as: "questions",
+    onDelete: "CASCADE",
+  });
+  Market.ProductQuestion.belongsTo(Accounts.Account, {
+    foreignKey: "accountId",
+    as: "asker",
+  });
+
 };
 
 module.exports = init;

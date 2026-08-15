@@ -35,6 +35,36 @@ const paragraph = (text) =>
 const note = (text) =>
   `<p style="margin:12px 0 0;font-size:13px;line-height:1.6;color:${MUTED};">${text}</p>`;
 
+/**
+ * Anything a person typed, on its way into a mail.
+ *
+ * Mail clients render HTML, so a question containing a link arrives as a link
+ * in the seller's inbox, in a message sent from Plaza's own address and
+ * carrying Plaza's name — which is a phishing mail we posted ourselves. Titles,
+ * usernames and free text all go through here; only the markup this file
+ * writes gets to be markup.
+ */
+const escape = (text) =>
+  String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+/**
+ * Something someone wrote, set apart from what Plaza is saying.
+ *
+ * Line breaks are kept, because a paragraph typed as three lines and delivered
+ * as one is not what was written.
+ */
+const quoted = (text, label) => `
+  <div style="margin:16px 0;padding:14px 16px;background:#eef1f6;border-left:3px solid ${BAND};border-radius:0 6px 6px 0;">
+    ${label
+      ? `<p style="margin:0 0 6px;font-size:12px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:${MUTED};">${label}</p>`
+      : ""}
+    <p style="margin:0;font-size:14px;line-height:1.6;color:${INK};">${escape(text).replace(/\n/g, "<br>")}</p>
+  </div>`;
+
 // Minutes rather than "soon": a person deciding whether to wait or ask for
 // another code needs the actual number.
 const verifyEmail = ({ username, code, minutes }) => ({
@@ -141,7 +171,7 @@ const lines = (items, currency) => `
     ${items
       .map(
         item => `<p style="margin:0 0 6px;font-size:14px;line-height:1.5;color:${INK};">
-          ${item.quantity > 1 ? `${item.quantity} &times; ` : ""}${item.title}
+          ${item.quantity > 1 ? `${item.quantity} &times; ` : ""}${escape(item.title)}
           <span style="color:${MUTED};">&nbsp;&nbsp;${money(Number(item.unitPrice) * item.quantity, currency)}</span>
         </p>`,
       )
@@ -202,16 +232,41 @@ const orderCancelled = ({ to, byBuyer, items, subtotal, currency, reason }) => (
   html: layout("An order was cancelled", `
     ${paragraph(`Hi ${to}, the ${byBuyer ? "buyer" : "seller"} cancelled this order for ${money(subtotal, currency)}.`)}
     ${lines(items, currency)}
-    ${
-      reason
-        ? `<div style="margin:16px 0;padding:14px 16px;background:#eef1f6;border-left:3px solid ${BAND};border-radius:0 6px 6px 0;">
-             <p style="margin:0;font-size:14px;line-height:1.6;color:${INK};">${reason}</p>
-           </div>`
-        : note("They did not say why.")
-    }
+    ${reason ? quoted(reason) : note("They did not say why.")}
     ${paragraph(byBuyer
       ? "Whatever was held back is on sale again."
       : "Nothing is owed. The listing is on sale again if you still want it.")}
+  `),
+});
+
+/* ─── questions ───────────────────────────────────────────────────────────
+   Both sides of a question, and neither of them says who the other is.
+
+   The buyer is anonymous on the listing, so they are anonymous here too:
+   telling the seller privately what the page deliberately withholds would
+   make the anonymity a decoration. The seller is not named either — they are
+   "the seller", the same way they are in the order notices.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/** To the seller: somebody wants to know something before they buy. */
+const questionAsked = ({ seller, title, question }) => ({
+  subject: "You have a new question",
+  html: layout("Someone asked about your listing", `
+    ${paragraph(`Hi ${escape(seller)}, there is a new question on ${escape(title)}.`)}
+    ${quoted(question, "Question")}
+    ${paragraph("Open Questions on Plaza to answer it. Your answer goes on the listing, where the next person wondering the same thing will read it without having to ask.")}
+    ${note("You will not see who asked. Questions on Plaza are anonymous, and there is one answer per question, so it is worth writing once.")}
+  `),
+});
+
+/** To whoever asked: it was answered. */
+const questionAnswered = ({ buyer, title, question, answer }) => ({
+  subject: "Your question was answered",
+  html: layout("The seller answered your question", `
+    ${paragraph(`Hi ${escape(buyer)}, the seller answered your question about ${escape(title)}.`)}
+    ${quoted(question, "You asked")}
+    ${quoted(answer, "They answered")}
+    ${note("There is one answer per question. If something is still not clear, ask another one on the listing.")}
   `),
 });
 
@@ -221,6 +276,8 @@ module.exports = {
   orderConfirmed,
   orderDelivered,
   orderCancelled,
+  questionAsked,
+  questionAnswered,
   verifyEmail,
   changeEmail,
   resetPassword,
