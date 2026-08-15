@@ -4,6 +4,8 @@ const { db } = require("../../database/config");
 const Market = require("../../models/market.models");
 const Accounts = require("../../models/accounts.models");
 const Geo = require("../../models/geo.models");
+const { mail } = require("../../mail");
+const templates = require("../../mail/templates");
 
 /* ─── what an order looks like when it comes back ─────────────────────────── */
 
@@ -130,6 +132,72 @@ const rollUp = async (orderId) => {
   await Market.Order.update({ status }, { where: { id: orderId } });
 };
 
+/* ─── telling the other one ───────────────────────────────────────────────── */
+
+/**
+ * Sends without being waited for.
+ *
+ * A mail that will not go must not fail the thing it was announcing: the order
+ * was placed, the stock moved, and returning an error over an unreachable mail
+ * server would tell the person the opposite of what happened. `mail` already
+ * catches everything and answers false, so this promise cannot reject.
+ *
+ * Not awaited either, because an order reaching four sellers is four round
+ * trips to a mail API, and nobody should watch a spinner for them.
+ */
+const tell = (to, template) => {
+  if (!to) return;
+  void mail(to, template.subject, template.html);
+};
+
+/**
+ * Who to write to, read outside the reveal.
+ *
+ * The payload sent to a browser has contact details stripped out of it until an
+ * order is confirmed, which is right for the browser and useless here: the
+ * whole point of the mail about a *pending* order is that it reaches a seller
+ * who has not answered yet. So the addresses are fetched plainly, and never
+ * put in a response.
+ */
+const partiesOf = async (subOrderId) => {
+  const part = await Market.SubOrder.findByPk(subOrderId, {
+    attributes: ["id", "orderId", "subtotal", "shopId"],
+    include: [
+      ITEM,
+      { model: Market.Shop, as: "shop", attributes: ["name"], required: false },
+      { model: Accounts.Account, as: "seller", attributes: ["username", "email", "phone"],
+        include: [{ model: Geo.Country, as: "phoneCountry", attributes: ["dialCode"], required: false }] },
+      {
+        model: Market.Order,
+        as: "order",
+        attributes: ["id", "currency"],
+        include: [{ model: Accounts.Account, as: "buyer", attributes: ["username", "email", "phone"],
+          include: [{ model: Geo.Country, as: "phoneCountry", attributes: ["dialCode"], required: false }] }],
+      },
+    ],
+  });
+
+  if (!part) return null;
+
+  return {
+    part,
+    seller: part.seller,
+    buyer: part.order?.buyer,
+    currency: part.order?.currency,
+    // The shop name if it was sold under one, because that is the name the
+    // buyer saw when they bought it.
+    sellerName: part.shop?.name ?? part.seller?.username,
+  };
+};
+
+/** The lines of one part of an order, as the mail templates want them. */
+const linesOf = (suborder) =>
+  (suborder.items ?? []).map(item => ({
+    title: item.title,
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+  }));
+
 /* ─── buying ──────────────────────────────────────────────────────────────── */
 
 /**
@@ -231,6 +299,46 @@ exports.create = catchAsync(async (req, res) => {
 
     return created;
   });
+
+  // One mail per seller, about their part only. A seller has no business
+  // reading what someone else in the same basket bought.
+  const parts = await Market.SubOrder.findAll({
+    where: { orderId: order.id },
+    attributes: ["id"],
+  });
+
+  for (const { id } of parts) {
+    const who = await partiesOf(id);
+    if (!who) continue;
+
+    tell(
+      who.seller?.email,
+      templates.orderPlaced({
+        seller: who.seller?.username,
+        items: linesOf(who.part),
+        subtotal: who.part.subtotal,
+        currency: who.currency,
+      }),
+    );
+  }
+
+  // And the buyer gets their own order written down. Everything they bought,
+  // in one message, because from their side it was one order.
+  const mine = await Market.SubOrder.findAll({
+    where: { orderId: order.id },
+    attributes: ["id"],
+    include: [ITEM],
+  });
+
+  tell(
+    req.sessionAccount.email,
+    templates.orderReceipt({
+      buyer: req.sessionAccount.username,
+      items: mine.flatMap(linesOf),
+      total: order.total,
+      currency: order.currency,
+    }),
+  );
 
   return res.status(201).json(await reload(order.id));
 });
@@ -340,7 +448,25 @@ exports.cancelAsBuyer = catchAsync(async (req, res, next) => {
     return next(new AppError(`This part is ${suborder.status} and cannot be cancelled`, 409));
   }
 
+  // Read before cancelling: the lines are still there either way, but doing it
+  // first keeps the two reads of the same row from disagreeing.
+  const who = await partiesOf(suborder.id);
+
   await cancel(suborder, "buyer", req.body.reason);
+
+  if (who) {
+    tell(
+      who.seller?.email,
+      templates.orderCancelled({
+        to: who.seller?.username,
+        byBuyer: true,
+        items: linesOf(who.part),
+        subtotal: who.part.subtotal,
+        currency: who.currency,
+        reason: req.body.reason?.trim() || null,
+      }),
+    );
+  }
 
   return res.status(200).json(await reload(req.order.id));
 });
@@ -386,6 +512,24 @@ exports.confirm = catchAsync(async (req, res, next) => {
   await req.suborder.update({ status: "confirmed" });
   await rollUp(req.suborder.orderId);
 
+  // The notice says it happened and points at the page. The contact details
+  // stay on the site, where the rule about who may see them is enforced on
+  // every request — a mail is forwarded, read on a shared screen, and reaches
+  // people who never agreed to anything.
+  const who = await partiesOf(req.suborder.id);
+
+  if (who) {
+    tell(
+      who.buyer?.email,
+      templates.orderConfirmed({
+        buyer: who.buyer?.username,
+        items: linesOf(who.part),
+        subtotal: who.part.subtotal,
+        currency: who.currency,
+      }),
+    );
+  }
+
   return res.status(200).json(await reloadSale(req.suborder.id));
 });
 
@@ -397,6 +541,20 @@ exports.deliver = catchAsync(async (req, res, next) => {
   await req.suborder.update({ status: "delivered" });
   await rollUp(req.suborder.orderId);
 
+  const who = await partiesOf(req.suborder.id);
+
+  if (who) {
+    tell(
+      who.buyer?.email,
+      templates.orderDelivered({
+        buyer: who.buyer?.username,
+        items: linesOf(who.part),
+        subtotal: who.part.subtotal,
+        currency: who.currency,
+      }),
+    );
+  }
+
   return res.status(200).json(await reloadSale(req.suborder.id));
 });
 
@@ -406,7 +564,23 @@ exports.cancelAsSeller = catchAsync(async (req, res, next) => {
     return next(new AppError(`This order is ${req.suborder.status} and cannot be cancelled`, 409));
   }
 
+  const who = await partiesOf(req.suborder.id);
+
   await cancel(req.suborder, "seller", req.body.reason);
+
+  if (who) {
+    tell(
+      who.buyer?.email,
+      templates.orderCancelled({
+        to: who.buyer?.username,
+        byBuyer: false,
+        items: linesOf(who.part),
+        subtotal: who.part.subtotal,
+        currency: who.currency,
+        reason: req.body.reason?.trim() || null,
+      }),
+    );
+  }
 
   return res.status(200).json(await reloadSale(req.suborder.id));
 });

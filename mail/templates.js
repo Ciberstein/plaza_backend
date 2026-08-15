@@ -4,9 +4,9 @@
 //
 // The palette matches the site: the deep green band, near-black text, and the
 // code set large enough to read off a phone without zooming.
-const BAND = "#00703c";
-const INK = "#1a1a1a";
-const MUTED = "#696969";
+const BAND = "#254c93";
+const INK = "#1a2032";
+const MUTED = "#5a6274";
 
 const layout = (title, body) => `
 <div style="margin:0;padding:0;background:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
@@ -107,7 +107,120 @@ const shopRejected = ({ username, shop, note }) => ({
   `),
 });
 
+/* ─── orders ──────────────────────────────────────────────────────────────
+   Notices, sent by Plaza, about something that happened.
+
+   They carry nobody's details. Not an email, not a phone, not the other
+   person's name — the counterparty is "the buyer" or "the seller" and nothing
+   more. Mail leaves the building: it sits in an inbox, gets forwarded, gets
+   read on a shared screen, and it reaches people who were never asked to agree
+   to anything.
+
+   Contact details belong on the site, where the rule about when they may be
+   seen is enforced on every request. Here the job is only to say that
+   something happened and that there is a page worth opening.
+
+   The recipient's own name is used to greet them. That is theirs.
+   ────────────────────────────────────────────────────────────────────────── */
+
+const money = (amount, currency = "COP") => {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return "-";
+
+  return new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: currency === "COP" ? 0 : 2,
+  }).format(value);
+};
+
+// The listings themselves, so the notice says which order it is about. A title
+// and a price are the listing's own public facts, not anybody's details.
+const lines = (items, currency) => `
+  <div style="margin:16px 0;padding:14px 16px;background:#eef1f6;border-radius:6px;">
+    ${items
+      .map(
+        item => `<p style="margin:0 0 6px;font-size:14px;line-height:1.5;color:${INK};">
+          ${item.quantity > 1 ? `${item.quantity} &times; ` : ""}${item.title}
+          <span style="color:${MUTED};">&nbsp;&nbsp;${money(Number(item.unitPrice) * item.quantity, currency)}</span>
+        </p>`,
+      )
+      .join("")}
+  </div>`;
+
+/** To the seller, the moment someone orders from them. */
+const orderPlaced = ({ seller, items, subtotal, currency }) => ({
+  subject: "You have a new order",
+  html: layout("Someone ordered from you", `
+    ${paragraph(`Hi ${seller}, you have a new order for ${money(subtotal, currency)}.`)}
+    ${lines(items, currency)}
+    ${paragraph("The stock is already held back for it. Open Your sales on Plaza to accept it or let it go.")}
+    ${note("Nothing is paid through Plaza. You settle it with the buyer on handover.")}
+  `),
+});
+
+/** To the buyer, so their own order is written down somewhere they keep. */
+const orderReceipt = ({ buyer, items, total, currency }) => ({
+  subject: "Your order is in",
+  html: layout("You placed an order", `
+    ${paragraph(`Hi ${buyer}, your order for ${money(total, currency)} has been sent.`)}
+    ${lines(items, currency)}
+    ${paragraph("Each seller has been asked to accept their part. You will hear from us when they answer.")}
+    ${note("You can cancel any part of it until the seller accepts. After that, only they can.")}
+  `),
+});
+
+/** To the buyer: it was accepted. Where to go, not who to call. */
+const orderConfirmed = ({ buyer, items, subtotal, currency }) => ({
+  subject: "Your order was accepted",
+  html: layout("The seller accepted your order", `
+    ${paragraph(`Hi ${buyer}, the seller accepted your order for ${money(subtotal, currency)}.`)}
+    ${lines(items, currency)}
+    ${paragraph("Open Your purchases on Plaza to see how to reach them and agree the handover.")}
+    ${note("From here, only the seller can cancel this order.")}
+  `),
+});
+
+/** To the buyer: the seller says it is handed over. */
+const orderDelivered = ({ buyer, items, subtotal, currency }) => ({
+  subject: "Your order was marked as delivered",
+  html: layout("Marked as delivered", `
+    ${paragraph(`Hi ${buyer}, the seller marked this order as handed over.`)}
+    ${lines(items, currency)}
+    ${note("If that is not right, reply to this email and tell us.")}
+  `),
+});
+
+/**
+ * To whichever of the two did not do it.
+ *
+ * The reason is optional, and its absence is said out loud rather than left as
+ * a gap: "they did not say why" is information, and an empty space is not.
+ */
+const orderCancelled = ({ to, byBuyer, items, subtotal, currency, reason }) => ({
+  subject: byBuyer ? "An order was cancelled" : "Your order was cancelled",
+  html: layout("An order was cancelled", `
+    ${paragraph(`Hi ${to}, the ${byBuyer ? "buyer" : "seller"} cancelled this order for ${money(subtotal, currency)}.`)}
+    ${lines(items, currency)}
+    ${
+      reason
+        ? `<div style="margin:16px 0;padding:14px 16px;background:#eef1f6;border-left:3px solid ${BAND};border-radius:0 6px 6px 0;">
+             <p style="margin:0;font-size:14px;line-height:1.6;color:${INK};">${reason}</p>
+           </div>`
+        : note("They did not say why.")
+    }
+    ${paragraph(byBuyer
+      ? "Whatever was held back is on sale again."
+      : "Nothing is owed. The listing is on sale again if you still want it.")}
+  `),
+});
+
 module.exports = {
+  orderPlaced,
+  orderReceipt,
+  orderConfirmed,
+  orderDelivered,
+  orderCancelled,
   verifyEmail,
   changeEmail,
   resetPassword,
