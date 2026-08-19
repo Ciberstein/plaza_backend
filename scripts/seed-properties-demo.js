@@ -45,6 +45,10 @@ const LISTINGS = [
         "balcony", "fitted_kitchen", "closets", "natural_gas",
       ],
       neighborhood: "Laureles",
+      // Carrera 76 with Calle 38, more or less. Approximate on purpose:
+      // this is demonstration data, and what it has to prove is that the
+      // map draws, not that the flat exists.
+      latitude: 6.2447, longitude: -75.5931,
       address: "Carrera 76 # 38-40, apto 302",
       addressVisibility: "street",
       phonePublic: true,
@@ -70,6 +74,7 @@ const LISTINGS = [
         "fireplace", "natural_gas", "pets_allowed",
       ],
       neighborhood: "Cedritos",
+      latitude: 4.7245, longitude: -74.0405,
       address: "Calle 140 # 12-18",
       addressVisibility: "exact",
       phonePublic: false,
@@ -94,6 +99,7 @@ const LISTINGS = [
       stratum: 2,
       features: [],
       neighborhood: "Turbaco",
+      latitude: 10.3352, longitude: -75.4247,
       address: "Vía Turbaco km 4 # 2-15",
       addressVisibility: "hidden",
       phonePublic: true,

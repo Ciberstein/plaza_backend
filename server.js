@@ -6,6 +6,8 @@ const { ensureColumns, ensureIndexes } = require("./database/migrations");
 const init = require("./models/init.models");
 
 const { seed } = require("./seeders");
+const { seedDemo } = require("./seeders/demo");
+const { startDemoSchedule } = require("./seeders/demo/schedule");
 
 const PORT = process.env.PORT || 4000;
 
@@ -27,6 +29,13 @@ const start = async () => {
     // Reference data the whole marketplace reads from: countries, cities and
     // the category tree. Idempotent, so it runs on every boot.
     await seed();
+
+    // And, on a developer's machine only, a marketplace with people in it.
+    // Both of these check NODE_ENV themselves and do nothing anywhere else —
+    // the guard is inside them rather than here, so it cannot be lost by
+    // somebody rearranging this file.
+    await seedDemo();
+    startDemoSchedule();
 
     server.listen(PORT, () => {
       console.log(

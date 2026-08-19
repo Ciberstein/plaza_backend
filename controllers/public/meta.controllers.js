@@ -2,6 +2,7 @@ const catchAsync = require("../../utils/catchAsync.util");
 const Market = require("../../models/market.models");
 const { Category } = require("../../models/categories.models");
 const Geo = require("../../models/geo.models");
+const { guest } = require("../../seeders/demo/guest");
 
 // The vocabulary the forms and the category strip are built from. Served rather
 // than duplicated in the frontend, so adding a category is one row and the two
@@ -97,6 +98,11 @@ exports.index = catchAsync(async (_req, res) => {
     propertyConditions: Market.PROPERTY_CONDITION.map(value => ({ value })),
     features: Market.PROPERTY_FEATURE.map(value => ({ value })),
     addressVisibility: Market.ADDRESS_VISIBILITY.map(value => ({ value })),
+    // The guest account, so the login screen can print it. Served rather than
+    // written into the frontend for two reasons: the password changes daily,
+    // and outside development this key is simply absent — which is a far
+    // better guarantee than a frontend remembering not to show something.
+    demo: guest(),
     strata: Array.from(
       { length: Market.MAX_STRATUM - Market.MIN_STRATUM + 1 },
       (_, i) => ({ value: Market.MIN_STRATUM + i }),

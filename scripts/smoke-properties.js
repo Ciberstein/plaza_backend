@@ -142,6 +142,100 @@ const refused = async (label, run) => {
   check("una dirección sin numeral sobrevive a street",
     publicAddress({ address: "Carrera 70", addressVisibility: "street" }) === "Carrera 70");
 
+  /* ── the map inherits the address decision ────────────────────────────── */
+  // A pin on the exact address publishes the address whatever the owner chose
+  // about the text, so the coordinate is displaced server-side for anything
+  // but `exact`. Exercised through the real helper rather than a copy: this is
+  // the one place the rule lives.
+  const { publicPoint } = require("../controllers/public/products.controllers");
+
+  const REAL = { latitude: 6.2442, longitude: -75.5812 };
+  const metres = (a, b) => {
+    const R = 6371000;
+    const rad = x => (x * Math.PI) / 180;
+    const dLat = rad(b.latitude - a.latitude);
+    const dLng = rad(b.longitude - a.longitude);
+    const h =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  };
+
+  const exact = publicPoint({ ...REAL, productId: 1, addressVisibility: "exact" });
+  check("exact entrega el punto real",
+    exact.latitude === REAL.latitude && exact.blurred === false);
+
+  // Every id, not one: the hash is where this breaks, and it broke here once —
+  // `^=` yields a signed integer, so half the ids produced a negative distance
+  // and a NaN coordinate.
+  let worst = 0;
+  let finite = true;
+
+  for (let id = 1; id <= 500; id += 1) {
+    const blurred = publicPoint({ ...REAL, productId: id, addressVisibility: "street" });
+    const away = metres(REAL, blurred);
+    if (!Number.isFinite(away)) { finite = false; break; }
+    worst = Math.max(worst, away);
+  }
+
+  check("ningún id produce coordenadas rotas", finite);
+  check("el punto mostrado nunca cae fuera del círculo", worst < 400, `máx ${worst.toFixed(0)} m`);
+  check("y siempre está desplazado del real", worst > 0);
+
+  // Stability is the security property. A fresh random offset per request
+  // looks fuzzy and is not: two hundred requests averaged return the exact
+  // address.
+  const once = publicPoint({ ...REAL, productId: 42, addressVisibility: "hidden" });
+  const twice = publicPoint({ ...REAL, productId: 42, addressVisibility: "hidden" });
+  check("el desplazamiento es estable entre llamadas",
+    once.latitude === twice.latitude && once.longitude === twice.longitude);
+
+  check("un inmueble sin coordenadas no inventa ninguna",
+    publicPoint({ productId: 1, addressVisibility: "exact" }).latitude === null);
+
+  /* ── searching by an area of the map ───────────────────────────────────── */
+  const { zoneFrom, inZone } = require("../controllers/public/products.controllers");
+
+  const MED = { productId: 17, latitude: 6.2447, longitude: -75.5931, addressVisibility: "street" };
+  const BOG = { productId: 18, latitude: 4.7245, longitude: -74.0405, addressVisibility: "exact" };
+
+  const within = (property, query) => inZone(property, zoneFrom(query));
+
+  check("la caja del mapa encuentra lo que contiene",
+    within(MED, { bbox: "6.20,-75.65,6.30,-75.53" }));
+  check("y no lo que está en otra ciudad",
+    !within(BOG, { bbox: "6.20,-75.65,6.30,-75.53" }));
+  check("una zona dibujada a mano encuentra lo suyo",
+    within(BOG, { polygon: "4.60,-74.15;4.85,-74.15;4.72,-73.90" }));
+  check("y descarta lo de fuera del trazo",
+    !within(MED, { polygon: "4.60,-74.15;4.85,-74.15;4.72,-73.90" }));
+
+  // Bad input means no zone, not no results and not a crash: a half-typed
+  // parameter should show the whole square, the way it did before anybody
+  // touched the map.
+  check("una caja invertida se ignora", within(MED, { bbox: "6.30,-75.53,6.20,-75.65" }));
+  check("dos puntos no son un área", within(MED, { polygon: "4.6,-74.1;4.8,-74.1" }));
+
+  /* ── and the reason the filter judges the shown point ──────────────────── */
+  // This is the one that matters. Filtering on the true coordinate would turn
+  // the map into an oracle against the blur: draw a small box, see whether the
+  // listing appears, move the box, and the exact address falls out in a dozen
+  // guesses.
+  const box = (point) => ({
+    bbox: [
+      point.latitude - 0.0008, point.longitude - 0.0008,
+      point.latitude + 0.0008, point.longitude + 0.0008,
+    ].join(","),
+  });
+
+  const shown = publicPoint(MED);
+
+  check("una caja sobre la dirección REAL no la encuentra", !within(MED, box(MED)),
+    "el filtro no desdifumina");
+  check("una caja sobre el punto MOSTRADO sí", within(MED, box(shown)));
+  check("y una dirección pública sí se busca por su punto real",
+    within(BOG, box(BOG)));
+
   /* ── what the validators refuse ────────────────────────────────────────── */
   await refused("área privada mayor que la construida", () =>
     Market.Property.build({

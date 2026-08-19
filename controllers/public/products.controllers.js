@@ -135,14 +135,81 @@ const publicAddress = (property) => {
   }
 };
 
-// Coordinates precise enough to place a listing on a street are the address by
-// another name, so they follow the same choice the address did. Withheld
-// entirely rather than blurred here — a fuzzed point is the map's problem and
-// inventing one in this layer would put a false coordinate in the payload.
-const publicPoint = (property) =>
-  property?.addressVisibility === "exact"
-    ? { latitude: property.latitude, longitude: property.longitude }
-    : { latitude: null, longitude: null };
+// How far the shown point may sit from the real one, and the circle drawn
+// around it. The circle is the larger of the two so the true location is
+// always somewhere inside what the reader is being shown — a circle smaller
+// than the offset would be a map that lies in the other direction.
+const BLUR_METRES = 300;
+const CIRCLE_METRES = 400;
+
+// One degree of latitude, near enough anywhere. Longitude narrows towards the
+// poles, which is why it is scaled by the cosine below.
+const METRES_PER_DEGREE = 111320;
+
+/**
+ * A number in [0, 1) from an integer, stable forever.
+ *
+ * The stability is the point. A random offset per request looks fuzzy and is
+ * not: ask for the same listing two hundred times and average the answers, and
+ * the noise cancels out to the exact address. Derived from the id instead, the
+ * displaced point is the same on every request, and averaging returns the
+ * displaced point.
+ */
+const jitter = (id, salt) => {
+  let hash = (id * 2654435761 + salt * 40503) >>> 0;
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 2246822507) >>> 0;
+  hash ^= hash >>> 13;
+  // `>>> 0` again, and it is load-bearing: `^=` yields a *signed* 32-bit
+  // integer, so without this the hash comes back negative for about half of
+  // all ids, and the square root of a negative distance is NaN — a listing
+  // with no coordinates at all rather than a blurred one.
+  return (hash >>> 0) / 4294967296;
+};
+
+/**
+ * Where a stranger is told the property is.
+ *
+ * The address decision governs the map, or it governs nothing: a pin on the
+ * exact address publishes the address whatever the owner chose about the text.
+ *
+ * So `exact` gets the real point, and everything else gets a displaced one
+ * with a circle around it — enough to answer "is this the neighbourhood I
+ * want", not enough to answer "which door". The displacement happens here and
+ * not in the browser, because a circle drawn client-side around a true point
+ * requires sending the true point, and a coordinate in a payload is public
+ * however it is later rendered.
+ */
+const publicPoint = (property) => {
+  if (!property?.latitude || !property?.longitude) {
+    return { latitude: null, longitude: null, blurred: false, radius: null };
+  }
+
+  const latitude = Number(property.latitude);
+  const longitude = Number(property.longitude);
+
+  if (property.addressVisibility === "exact") {
+    return { latitude, longitude, blurred: false, radius: null };
+  }
+
+  // A direction and a distance, both drawn from the id. The distance is
+  // square-rooted so the points land evenly over the disc rather than
+  // clustering in the middle, which would make the centre the best guess.
+  const angle = jitter(property.productId, 1) * 2 * Math.PI;
+  const distance = Math.sqrt(jitter(property.productId, 2)) * BLUR_METRES;
+
+  const north = (distance * Math.sin(angle)) / METRES_PER_DEGREE;
+  const east =
+    (distance * Math.cos(angle)) /
+    (METRES_PER_DEGREE * Math.cos((latitude * Math.PI) / 180));
+
+  return {
+    latitude: Number((latitude + north).toFixed(6)),
+    longitude: Number((longitude + east).toFixed(6)),
+    blurred: true,
+    radius: CIRCLE_METRES,
+  };
+};
 
 /**
  * The property block as a stranger may see it.
@@ -174,6 +241,129 @@ const whole = (value) => {
   if (value === undefined || value === null || value === "") return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+};
+
+/* ─── searching by an area of the map ─────────────────────────────────────── */
+
+// A drawn shape has to stay a shape somebody drew, not a thousand-vertex
+// polygon pasted into a query string to make the server walk it per row.
+const MAX_VERTICES = 200;
+
+/** "minLat,minLng,maxLat,maxLng" — what the map can currently see. */
+const parseBounds = (value) => {
+  const parts = String(value ?? "").split(",").map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isFinite(n))) return null;
+
+  const [minLat, minLng, maxLat, maxLng] = parts;
+  if (minLat > maxLat || minLng > maxLng) return null;
+
+  return { minLat, minLng, maxLat, maxLng };
+};
+
+/** "lat,lng;lat,lng;…" — the zone somebody drew by hand. */
+const parsePolygon = (value) => {
+  const ring = String(value ?? "")
+    .split(";")
+    .map(pair => pair.split(",").map(Number))
+    .filter(pair => pair.length === 2 && pair.every(Number.isFinite));
+
+  // Fewer than three points is not an area, and past the cap it is not a
+  // drawing either.
+  if (ring.length < 3 || ring.length > MAX_VERTICES) return null;
+
+  return ring;
+};
+
+/** The box a ring sits in, so the database can do the coarse pass. */
+const boundsOf = (ring) => ({
+  minLat: Math.min(...ring.map(p => p[0])),
+  maxLat: Math.max(...ring.map(p => p[0])),
+  minLng: Math.min(...ring.map(p => p[1])),
+  maxLng: Math.max(...ring.map(p => p[1])),
+});
+
+/**
+ * Ray casting: count the edges a ray from the point crosses going east.
+ *
+ * Odd means inside. No PostGIS for this — the extension would have to be
+ * installed and the geometry columns maintained to answer a question about a
+ * few hundred rows that the database has already narrowed to a box.
+ */
+const insidePolygon = ([lat, lng], ring) => {
+  let inside = false;
+
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [latI, lngI] = ring[i];
+    const [latJ, lngJ] = ring[j];
+
+    const straddles = latI > lat !== latJ > lat;
+    if (!straddles) continue;
+
+    const crossing = ((lngJ - lngI) * (lat - latI)) / (latJ - latI) + lngI;
+    if (lng < crossing) inside = !inside;
+  }
+
+  return inside;
+};
+
+/**
+ * A box grown by the blur, in degrees.
+ *
+ * The coarse pass runs in SQL against the *true* coordinate, because that is
+ * the column the database has. The precise pass below runs against the
+ * displaced one. So the SQL box has to be wider than the drawn one by the most
+ * the displacement can move a point, or a property whose blurred pin sits
+ * inside the zone would be dropped before anybody looked at it.
+ */
+const widen = (bounds) => {
+  const lat = BLUR_METRES / METRES_PER_DEGREE;
+  // The worst case across the box, which is its highest latitude in absolute
+  // terms — longitude degrees are shortest there.
+  const worst = Math.max(Math.abs(bounds.minLat), Math.abs(bounds.maxLat));
+  const lng = BLUR_METRES / (METRES_PER_DEGREE * Math.cos((worst * Math.PI) / 180));
+
+  return {
+    minLat: bounds.minLat - lat,
+    maxLat: bounds.maxLat + lat,
+    minLng: bounds.minLng - lng,
+    maxLng: bounds.maxLng + lng,
+  };
+};
+
+/**
+ * Whether a listing falls in the drawn area — judged on the point the map is
+ * showing, never on the one in the database.
+ *
+ * This is the security decision, and it is easy to get backwards. Filtering on
+ * the true coordinate would make the search an oracle against the blur: draw a
+ * small enough zone, watch whether the listing appears, move the zone, and the
+ * exact address falls out in a dozen guesses. Filtering on the displaced point
+ * means the map answers questions about the map.
+ *
+ * It also happens to be what the reader expects. A pin drawn inside the zone
+ * and excluded from the results reads as a broken filter.
+ */
+const inZone = (property, zone) => {
+  if (!zone) return true;
+
+  const { latitude, longitude } = publicPoint(property);
+  if (latitude === null || longitude === null) return false;
+
+  if (zone.ring) return insidePolygon([latitude, longitude], zone.ring);
+
+  return (
+    latitude >= zone.minLat && latitude <= zone.maxLat &&
+    longitude >= zone.minLng && longitude <= zone.maxLng
+  );
+};
+
+/** The area asked for, if any: a drawn ring wins over the visible box. */
+const zoneFrom = (query) => {
+  const ring = parsePolygon(query.polygon);
+  if (ring) return { ring, ...boundsOf(ring) };
+
+  const bounds = parseBounds(query.bbox);
+  return bounds ? { ring: null, ...bounds } : null;
 };
 
 /**
@@ -279,6 +469,18 @@ const categoryIds = async (slugs) => {
   return [...ids, ...children.map(c => c.id)];
 };
 
+// Exported for the smoke script, alongside publicPoint: the zone filter and
+// the blur are one mechanism, and the thing worth proving about them is that
+// the filter judges the displaced point rather than the real one.
+exports.zoneFrom = zoneFrom;
+exports.inZone = inZone;
+exports.widen = widen;
+
+// Exported for the smoke script. The displacement is the only piece of this
+// file with a security property worth checking from outside, and checking a
+// copy of it would prove nothing about the copy that runs.
+exports.publicPoint = publicPoint;
+
 exports.list = catchAsync(async (req, res, next) => {
   const where = { ...listed };
 
@@ -330,6 +532,7 @@ exports.list = catchAsync(async (req, res, next) => {
 
   const isProperty = where.kind === "property";
   const regions = list(req.query.region);
+  const zone = isProperty ? zoneFrom(req.query) : null;
 
   // `required: true` when the aisle is properties, which makes the join do the
   // filtering: a listing whose property row does not match is not a result.
@@ -338,11 +541,23 @@ exports.list = catchAsync(async (req, res, next) => {
   const include = [SHOP, SELLER];
 
   if (isProperty) {
+    const onProperty = propertyWhere(req.query);
+
+    // The coarse pass. Widened by the blur, because this runs against the true
+    // coordinate and the precise pass below runs against the displaced one —
+    // without the margin, a property whose shown pin sits just inside the zone
+    // would be dropped before anything looked at it.
+    if (zone) {
+      const box = widen(zone);
+      onProperty.latitude = { [Op.between]: [box.minLat, box.maxLat] };
+      onProperty.longitude = { [Op.between]: [box.minLng, box.maxLng] };
+    }
+
     include.push({
       model: Market.Property,
       as: "property",
       attributes: PROPERTY_ATTRS,
-      where: propertyWhere(req.query),
+      where: onProperty,
       required: true,
     });
 
@@ -366,6 +581,13 @@ exports.list = catchAsync(async (req, res, next) => {
     subQuery: false,
   });
 
+  // The precise pass, against the point the map will actually draw. Run before
+  // the photographs and the averages so nothing is fetched for a row that is
+  // about to be dropped.
+  const inside = zone
+    ? products.filter(product => inZone(product.property, zone))
+    : products;
+
   // The photographs in one more query rather than joining a second hasMany onto
   // a limited select, which is what turns one page of results into a cartesian
   // product of rows.
@@ -373,7 +595,7 @@ exports.list = catchAsync(async (req, res, next) => {
   // All of them now, not only the cover: a card you can flick through without
   // opening it is the difference between browsing and clicking back and forth.
   const shots = await Market.ProductImage.findAll({
-    where: { productId: products.map(p => p.id) },
+    where: { productId: inside.map(p => p.id) },
     attributes: ["id", "productId", "url"],
     order: [["productId", "ASC"], ["position", "ASC"]],
   });
@@ -386,10 +608,10 @@ exports.list = catchAsync(async (req, res, next) => {
     byProduct.set(shot.productId, held);
   }
 
-  const rated = await averages(Market.ProductReview, "productId", products.map(p => p.id));
+  const rated = await averages(Market.ProductReview, "productId", inside.map(p => p.id));
 
   return res.status(200).json(
-    products.map(product => {
+    inside.map(product => {
       const images = byProduct.get(product.id) ?? [];
 
       return {
